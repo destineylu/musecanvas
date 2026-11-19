@@ -34,7 +34,7 @@ import uuid
 import unicodedata
 
 from cdp import CDP, http_json
-from proxy import HTTPProxyRelay, request_proxy_context
+from proxy import HTTPProxyRelay, request_proxy_context, normalize_server
 
 log = logging.getLogger("muse2api")
 
@@ -365,6 +365,11 @@ class MuseEngine:
                 f"--user-data-dir={self.cfg.profile_dir}",
                 "about:blank",
             ]
+            # A NAS-wide explicit proxy also applies to newly imported accounts.
+            # Account-specific browser contexts can still override this default.
+            browser_proxy = env.get("MUSE2API_BROWSER_PROXY", "").strip()
+            if browser_proxy:
+                args.insert(-1, "--proxy-server=" + normalize_server(browser_proxy))
             # 尝试复用已有健康 CDP
             if not self.proc:
                 try:

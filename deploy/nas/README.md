@@ -58,3 +58,20 @@ docker compose up -d --build
 - 更新时先等现有任务完成，在该用户部署目录执行 `docker compose up -d --build`，服务就绪后刷新页面。只更新自己的容器组，不共用或覆盖他人的数据卷。
 - 桌面版的「重新连接」处理免登录会话；NAS 账号模式仍必须登录，不能使用本机接口绕过。
 - 完整创作操作与错误排查见 [使用说明](../../docs/使用说明.md)。不要删除数据库、密钥或 profiles 作为排查第一步。
+# NAS 的 Muse 出站代理
+
+Windows 的代理配置不会自动作用于 NAS。可在 NAS 的独立 Docker 网络运行 Mihomo，再让工作区加入该网络；只需代理出站，不需要启用 TUN 或公开代理端口。
+
+在工作区 Compose 的 `environment` 中设置：
+
+```yaml
+MUSE2API_BROWSER_PROXY: http://musecanvas-proxy:7890
+HTTP_PROXY: http://musecanvas-proxy:7890
+HTTPS_PROXY: http://musecanvas-proxy:7890
+NO_PROXY: localhost,127.0.0.1,::1,.ts.net,100.64.0.0/10,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+`musecanvas-proxy` 是同一 Docker 网络中的代理服务名。`MUSE2API_BROWSER_PROXY` 是 Chromium 启动时的默认代理；已配置的账号独立代理仍优先。修改后重建工作区容器使浏览器重启。不要将 Windows 路径或 `127.0.0.1:7890` 直接照搬到 NAS 的另一个容器。
+
+配置文件内的节点密码、订阅地址和控制器 secret 应仅保存在 NAS 私有目录，不得提交仓库。控制器与代理端口无需开放到公网。网络可达、Cookie 登录有效、云端工作区可用和真实生成成功是不同检查项，不能互相替代。
+
