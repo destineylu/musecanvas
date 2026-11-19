@@ -31,7 +31,7 @@ def load_waiter(path):
     return scope
 
 
-def scenario(source, text, ready_at=25, timeout=90, later_text=None, stop_until=0, cover=False):
+def scenario(source, text, ready_at=25, timeout=90, later_text=None, stop_until=0, cover=False, thread_path='/thread/fixture'):
     scope = load_waiter(source)
     clock = SimpleNamespace(now=0.0)
     def sleep(seconds):
@@ -41,7 +41,7 @@ def scenario(source, text, ready_at=25, timeout=90, later_text=None, stop_until=
     def state(_script):
         current = later_text[1] if later_text and clock.now >= later_text[0] else text
         return json.dumps({"cnt": 1, "txt": current, "tail": current,
-                           "stop": clock.now < stop_until, "path": "/thread/fixture"})
+                           "stop": clock.now < stop_until, "path": thread_path})
     waiter.page = SimpleNamespace(js=state)
     waiter._scroll_bottom = lambda: None
     def attachments():
@@ -74,6 +74,10 @@ def cases(source):
     result["claim_no_attachment"] = scenario(source, cn, ready_at=None, timeout=45)
     result["claim_only_cover"] = scenario(source, cn, ready_at=None, timeout=45, cover=True)
     result["stop_lifecycle"] = scenario(source, cn, ready_at=30, stop_until=20)
+    result["cn_reference_240"] = scenario(source, "已按参考图生成，16:9 横屏，5 秒：优雅谢幕。", ready_at=240,timeout=1800)
+    result["cn_unknown_240"] = scenario(source, "请看接下来的舞台画面。",ready_at=240,timeout=1800)
+    result["cn_new_thread_240"] = scenario(source, "",ready_at=240,timeout=1800,stop_until=1,thread_path='/thread/new')
+    result["unknown_no_attachment"] = scenario(source, "请看接下来的舞台画面。",ready_at=None,timeout=45)
     result["cn_fresh_30"] = scenario(source, "已从零生成，全新图片，9:16 竖屏，无参考图。", ready_at=30)
     result["fresh_claim_no_attachment"] = scenario(source, "已从零生成，全新图片。", ready_at=None, timeout=45)
     refusal = "视频没生成成功：你这个账号所在的国家/地区目前不支持视频生成。"
@@ -112,10 +116,10 @@ def main():
     source = ROOT / "engine.py"
     result = cases(source)
     for name, item in result.items():
-        if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "cn_fresh_", "en_claim_", "en_ready_", "verified_report_")):
+        if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "cn_fresh_", "cn_reference_", "cn_unknown_", "cn_new_thread_", "en_claim_", "en_ready_", "verified_report_")):
             assert item["outcome"] == "video", (name, item)
             assert item["elapsed"] >= int(name.rsplit("_", 1)[1]), (name, item)
-        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment", "fresh_claim_no_attachment", "ack_ongoing_no_attachment"):
+        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment", "fresh_claim_no_attachment", "ack_ongoing_no_attachment", "unknown_no_attachment"):
             assert item["outcome"] == "timeout" and 45 <= item["elapsed"] < 46, (name, item)
         elif name in ("ack_then_attachment", "ack_en_then_attachment", "ack_ongoing_then_attachment"):
             assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)

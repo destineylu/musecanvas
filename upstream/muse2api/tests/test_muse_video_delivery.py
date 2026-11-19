@@ -94,18 +94,12 @@ else:
 assert engine_module.MuseEngine._media_refusal_text(
     "Settings\\nRegion: US\\nVideo", "video") == ""
 
-# A completed submission that remains idle on /thread/new stops before 600s,
-# but only after the Stop lifecycle and a long quiet period.
-try:
-    wait_case([
-        {"stop": True, "tail": "", "path": "/thread/new"},
-        {"stop": False, "tail": "", "path": "/thread/new"},
-    ])
-except engine_module.MuseGenerationError as exc:
-    assert "未建立视频任务线程" in str(exc), str(exc)
-else:
-    raise AssertionError("idle /thread/new task waited for full timeout")
+# An idle /thread/new is not confirmed failure. Honor the full configured budget.
+assert wait_case([
+    {"stop": True, "tail": "", "path": "/thread/new"},
+    {"stop": False, "tail": "", "path": "/thread/new"},
+],timeout=1800) is None
 
 # No observed submission lifecycle must not trigger the early no-thread error.
 assert wait_case([{"stop": False, "tail": "", "path": "/thread/new"}], timeout=20) is None
-print("PASS: explicit refusal propagated; idle no-thread stopped; normal wait preserved")
+print("PASS: explicit refusal propagated; idle new thread honors 30-minute budget; normal wait preserved")

@@ -1197,8 +1197,6 @@ class MuseEngine:
         last_txt, txt_stable = "", 0
         refusal_last, refusal_stable = "", 0
         seen_stop = False
-        previous_state = None
-        last_activity = t_start
         progress_sent = 0
         resent = False
         while time.time() < deadline:
@@ -1275,12 +1273,7 @@ class MuseEngine:
             cur_cnt = int(st.get("cnt") or 0)
             cur_txt = st.get("txt") or ""
             has_stop = bool(st.get("stop"))
-            path = st.get("path") or ""
             seen_stop = seen_stop or has_stop
-            state = (cur_cnt, cur_txt, len(atts), has_stop, path)
-            if previous_state is None or state != previous_state:
-                last_activity = time.time()
-                previous_state = state
 
             if on_progress:
                 milestone = 25 if seen_stop else 20
@@ -1326,12 +1319,9 @@ class MuseEngine:
                 refusal_last, refusal_stable = "", 0
 
             if cur_cnt > base_agent_cnt and cur_txt and not has_stop and len(atts) <= base_att_cnt:
-                # Media-status text can precede a real attachment; do not fail on it.
-                # 同理，「收到，我来画」这类确认语也不是拒绝：冷启动时工具卡会晚十几秒出现，
-                # 这里继续等附件，真超时也只会走 MuseGenerationError 换号重试。
-                is_media_report = (self._media_status_pending(cur_txt)
-                                   or self._media_ack_text(cur_txt))
-                if not is_media_report:
+                # Only explicit failure wording can fail early. Arbitrary captions,
+                # progress messages, and success claims must wait for real media.
+                if self._media_refusal_like(cur_txt):
                     if cur_txt == last_txt:
                         txt_stable += 1
                     else:
@@ -1345,15 +1335,8 @@ class MuseEngine:
             else:
                 txt_stable = 0
 
-            # Muse accepted the click but never created a thread. Requiring a completed
-            # Stop-button lifecycle, an idle page, no messages/attachments and /thread/new
-            # avoids treating ordinary long video rendering as failure.
-            if (expect == "video" and seen_stop and not has_stop
-                    and path.rstrip("/").endswith("/thread/new")
-                    and cur_cnt <= base_agent_cnt and len(atts) <= base_att_cnt
-                    and elapsed >= 180.0 and time.time() - last_activity >= 90.0):
-                raise MuseGenerationError(
-                    "Muse 未建立视频任务线程，页面在提交结束后持续无响应（已提前停止等待）")
+            # Thread URL and Stop-button transitions are not delivery/failure proof.
+            # An idle /thread/new waits until the caller's execution deadline.
         return None
 
     @staticmethod
