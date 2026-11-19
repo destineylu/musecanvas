@@ -30,5 +30,5 @@ with zipfile.ZipFile(extension,'w',zipfile.ZIP_DEFLATED) as z:
         if name.startswith('extension/'):z.writestr(name[len('extension/'):],content(root/name))
 sums=[]
 for file in [archive,out/'install.sh',extension]:sums.append(hashlib.sha256(file.read_bytes()).hexdigest()+'  '+file.name)
-(out/'SHA256SUMS').write_text('\n'.join(sums)+'\n',encoding='utf-8')
+(out/'SHA256SUMS').write_text('\n'.join(sums)+'\n',encoding='utf-8',newline='\n')
 print(json.dumps({'files':[p.name for p in [archive,out/'install.sh',extension,out/'SHA256SUMS']],'tracked_files':len(files),'archive_bytes':archive.stat().st_size}))
