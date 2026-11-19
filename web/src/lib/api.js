@@ -31,6 +31,8 @@ export async function request(path, { method = 'GET', body, form } = {}) {
 export const api = {
   models: () => request('/api/models'),
   modelConfig: () => request('/api/models/config'),
+  comfyLibrary: () => request('/api/models/comfy/library'),
+  comfyWorkflow: id => request('/api/models/comfy/library/'+encodeURIComponent(id)),
   saveModel: (id,body) => request('/api/models'+(id?'/'+encodeURIComponent(id):''),{method:id?'PUT':'POST',body}),
   modelDefaults: body => request('/api/models/defaults',{method:'PUT',body}),
   deleteModel: id => request('/api/models/'+encodeURIComponent(id),{method:'DELETE'}),

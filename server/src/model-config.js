@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CFG } from './config.js';
+import { validateComfy } from '../../shared/comfy-workflow.js';
 
 const file = path.join(CFG.dataDir, 'models.json');
 const kinds = ['chat', 'image', 'video'];
@@ -35,7 +36,7 @@ export function saveModel(id, input) {
   let url; try { url = new URL(p.baseUrl); } catch { throw bad('Base URL 无效'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw bad('Base URL 仅允许不带密码和查询参数的 HTTP/HTTPS 地址');
   p.baseUrl = url.href.replace(/\/$/, '');
-  const allowed = { chat: ['chat'], image: ['images'], video: ['video-json', 'video-openai'] };
+  const allowed = { chat: ['chat'], image: ['images','comfyui'], video: ['video-json', 'video-openai','comfyui'] };
   if (!allowed[p.kind].includes(p.protocol)) throw bad('模型类型与协议不匹配');
   for (const key of ['createPath', 'pollPath', 'contentPath', 'editPath']) {
     if (p[key] && (!p[key].startsWith('/') || p[key].startsWith('//') || /[?#\\]/.test(p[key]) || p[key].split('/').includes('..'))) throw bad('接口路径必须以 / 开头且不能包含查询参数');
@@ -54,6 +55,11 @@ export function saveModel(id, input) {
   if (['model','messages','prompt','stream','images','image','input_reference'].some(k => k in p.extra)) throw bad('附加参数不能覆盖模型、提示词和参考图字段');
   p.maxConcurrency = Math.max(1, Math.min(4, Math.floor(Number(input.maxConcurrency ?? old?.maxConcurrency) || 1)));
   p.maxReferences = Math.max(0, Math.min(p.protocol === 'video-openai' ? 1 : 3, Math.floor(Number(input.maxReferences ?? old?.maxReferences) || 0)));
+  if(p.protocol==='comfyui'){
+    p.comfy=validateComfy(input.comfy??old?.comfy,p.kind);
+    p.maxConcurrency=1;
+    p.maxReferences=p.comfy.bindings.some(b=>b.source==='image')?1:0;
+  }else delete p.comfy;
   p.durations = input.durations ?? old?.durations ?? (p.protocol === 'video-openai' ? [4,8,12] : [5,6,8,10]);
   if (!Array.isArray(p.durations) || !p.durations.length || p.durations.length>20 || p.durations.some(n=>!Number.isInteger(n)||n<1||n>120)) throw bad('时长必须是 1–120 秒的整数数组');
   persist({ ...state, providers: [...state.providers.filter(x => x.id !== p.id), p] });

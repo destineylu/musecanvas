@@ -5,6 +5,8 @@ import { referenceImage } from './mediaRefs.js';
 import * as legacy from './muse2api.js';
 import { selectedModel, modelById } from './model-config.js';
 import { submitExternal, pollExternal, externalResult, saveExternalResult } from './external-models.js';
+import { submitComfy, pollComfy, saveComfyResult, comfyOrigin } from './comfyui.js';
+import { buildComfyPrompt } from '../../shared/comfy-workflow.js';
 
 const inflight = new Set();
 
@@ -28,6 +30,7 @@ export function createQueuedJob(userId, type, prompt, params, workspace = {}) {
   }
   const provider = workspace.binding ? (workspace.binding.providerId ? modelById(workspace.binding.providerId) : null) : selectedModel(type);
   if (workspace.binding?.providerId && (!provider || provider.revision !== workspace.binding.revision)) throw new Error('流程使用的模型配置已修改，请重新创建流程');
+  if(provider?.protocol==='comfyui')buildComfyPrompt(provider.comfy,{prompt,params},params.images?.length?'reference-placeholder.png':null,1);
   const bound = provider ? { ...params, providerId: provider.id, providerRevision: provider.revision, model: provider.model, modelName: provider.name } : params;
   const job = createJob(userId, type, prompt, bound, cost);
   updateJob(job.id, { upstream_id: provider ? 'external:queued' : (workspace.binding ? workspace.binding.mode === 'muse2api' : usesMuse2api) ? 'muse2api:queued' : 'bridge:queued', project_id: workspace.projectId, canvas_id: workspace.canvasId });
@@ -141,6 +144,27 @@ async function runExternalJob(job) {
   try {
     const p = modelById(job.params.providerId);
     if (!p || p.revision !== job.params.providerRevision) throw new Error('此任务的模型配置已更改或删除，请核对后重新提交');
+    if(p.protocol==='comfyui'){
+      let state=job.result||{};
+      if(job.upstreamId==='external:queued'){
+        const refs=(job.params.images||[]).map(item=>referenceImage(job.userId,item));
+        updateJob(job.id,{upstream_id:'external:submitting',status:'processing',progress:10});
+        const submitted=await submitComfy(p,job,refs);
+        state={...submitted,submittedAt:Date.now()};
+        updateJob(job.id,{upstream_id:'external:polling',result:JSON.stringify(state),progress:15});return;
+      }
+      if(job.upstreamId!=='external:polling'||!state.taskId)throw new Error('ComfyUI 提交时程序中断，结果未知，请核对队列后再提交');
+      if(Date.now()-(state.submittedAt||job.createdAt)>2*60*60000)throw new Error('ComfyUI 任务超过两小时，请核对队列；任务不会自动重新提交');
+      const result=await pollComfy(p,state.taskId,job.type);
+      if(result.state==='missing'){
+        if(state.missingSince&&Date.now()-state.missingSince>30000)throw new Error('ComfyUI 队列和历史中找不到此任务，可能已重启或清空历史；请核对后重试');
+        if(!state.missingSince)updateJob(job.id,{result:JSON.stringify({...state,missingSince:Date.now()})});return;
+      }
+      if(state.missingSince)updateJob(job.id,{result:JSON.stringify({...state,missingSince:null})});
+      if(result.state!=='done')return;
+      const {fileName,bytes}=await saveComfyResult(p,job,result.url);
+      updateJob(job.id,{status:'completed',progress:100,media_file:fileName,error:null,result:JSON.stringify({localUrl:'/media/'+fileName,bytes,taskId:state.taskId,seed:state.seed}),finished_at:Date.now()});return;
+    }
     let data, taskId = job.result?.taskId;
     if (job.upstreamId === 'external:queued') {
       const refs = (job.params.images || []).map(item => referenceImage(job.userId, item));
@@ -177,6 +201,11 @@ function dispatch() {
     if (['external:queued','muse2api:queued','bridge:queued'].includes(job.upstreamId) && pendingJobs().filter(j=>j.status==='processing').length >= CFG.bridgeConcurrency) continue;
     if (job.upstreamId.startsWith('external:')) {
       const p = modelById(job.params.providerId);
+      if(p?.protocol==='comfyui'&&job.upstreamId==='external:queued'&&pendingJobs().some(j=>{
+        if(j.id===job.id||j.status!=='processing')return false;
+        const other=modelById(j.params.providerId);
+        return other?.protocol==='comfyui'&&comfyOrigin(other)===comfyOrigin(p);
+      }))continue;
       const active = [...inflight].map(id=>getJob(id)).filter(j=>j?.params.providerId===job.params.providerId).length;
       if (p && active >= p.maxConcurrency) continue;
       if (p && job.upstreamId === 'external:queued' && pendingJobs().filter(j=>j.params.providerId===p.id && j.status==='processing').length >= p.maxConcurrency) continue;
