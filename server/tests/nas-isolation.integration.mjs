@@ -18,6 +18,7 @@ async function make(name){
  if(req.headers.authorization!=='Bearer '+key){res.statusCode=401;return json({error:'bad key'});}
  if(req.url==='/admin/accounts')return json({accounts:[{id:name+'-muse',label:name+' private Muse',ok:true,generation_enabled:true}]});
  if(req.url==='/admin/scheduler')return json({max_concurrency:1});
+ if(req.url.endsWith('/test')&&req.method==='POST')return json({ok:false,message:'Mock Muse network timeout; session unconfirmed'});
  if(req.url==='/v1/models')return json({data:[{id:name+'-model'}]});
  if(req.url==='/v1/images/tasks'&&req.method==='POST')return json({id:name+'-task',status:'queued'});
  if(req.url==='/v1/images/tasks/'+name+'-task')return json({id:name+'-task',status:'completed',url:'/v1/media/result.png'});
@@ -107,6 +108,11 @@ try{
  assert.equal(await js(`[...document.querySelectorAll('section[aria-label="API 设置"] li')].find(e=>e.textContent.includes('browser harness key')).querySelector('code').textContent.includes('…')`),true);
  await js(`window.confirm=()=>true;[...document.querySelectorAll('section[aria-label="API 设置"] li')].find(e=>e.textContent.includes('browser harness key')).querySelector('button:last-child').click()`);
  await visible(`![...document.querySelectorAll('section[aria-label="API 设置"] li')].some(e=>e.textContent.includes('browser harness key'))`);
+ await send('Page.navigate',{url:a.base+'/accounts'});
+ await visible(`!![...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='检测')`);
+ await js(`[...document.querySelectorAll('button')].find(e=>e.textContent.trim()==='检测').click()`);
+ await visible(`document.body.textContent.includes('Mock Muse network timeout; session unconfirmed')`);
+ assert.equal(await js(`document.body.textContent.includes('检测完成')`),false,'HTTP 200 with ok:false must not display a successful check');
  await js(`document.querySelector('button[aria-label="退出登录"]').click()`);await visible(`!!document.querySelector('input[aria-label="工作区账号"]')`);
  assert.equal(await js(`(async()=>{const r=await fetch(${JSON.stringify(done.mediaUrl)});return r.status;})()`),401);assert.equal(errors.length,0,errors.join('\n'));
  await send('Page.navigate',{url:b.base+'/projects'});await visible(`!!document.querySelector('input[aria-label="工作区账号"]')`);

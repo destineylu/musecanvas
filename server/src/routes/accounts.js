@@ -297,7 +297,7 @@ r.post('/:id/test', requireAuth, async (req, res) => {
       upstreamId: row.upstream_id,
       label: row.label,
       status: ok ? 'ok' : (out?.session_ok === false ? 'error' : 'unknown'),
-      note: out?.note || out?.error || null,
+      note: out?.note || out?.error || out?.message || null,
       expiresAt: out?.expires_at || row.expires_at,
       quota: out?.quota ? JSON.stringify(out.quota) : row.quota,
     });

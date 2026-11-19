@@ -71,9 +71,16 @@ export default function Accounts() {
   const act = async (id, fn, okMsg) => {
     setBusyId(id);
     try {
-      await fn(id);
-      toast(okMsg, 'ok');
+      const out = await fn(id);
       await load();
+      const result = out?.result || out;
+      if (result?.ok === false || result?.session_ok === false || result?.valid === false) {
+        toast(result.error || result.message || '本次检测未确认，请检查服务器网络与代理', 'error');
+      } else if (result?.quota_error) {
+        toast('会话已确认，但额度读取未成功：' + result.quota_error, 'error');
+      } else {
+        toast(result?.message || okMsg, 'ok');
+      }
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -93,8 +100,12 @@ export default function Accounts() {
         const account = targets[index];
         setBatchProgress({ current: index + 1, total: targets.length, label: account.label });
         try {
-          if (kind === 'test') await api.testAccount(account.id);
-          else await api.keepaliveAccount(account.id);
+          const out = kind === 'test' ? await api.testAccount(account.id) : await api.keepaliveAccount(account.id);
+          const result = out?.result || out;
+          if (result?.ok === false || result?.session_ok === false || result?.valid === false) {
+            throw new Error(result.error || result.message || '本次检测未确认');
+          }
+          if (result?.quota_error) throw new Error('会话已确认，但额度读取未成功：' + result.quota_error);
           completed += 1;
         } catch (error) {
           failures.push(`${account.label}：${error.message}`);
@@ -470,7 +481,8 @@ function AccountCard({ a, busy, canRename, onTest, onKeepalive, onRemove, onQuot
           {a.quota?.weeklyReset && <span>{a.quota.weeklyReset} 重置</span>}
           {a.quota?.tokensLeft && <span>额外 {a.quota.tokensLeft} tokens</span>}
         </p>
-        {a.note && <p className="mt-1 truncate text-[11px] text-ink-500" title={a.note}>{a.note}</p>}
+        {a.note && <p className={clsx('mt-1 text-xs', /未确认|网络请求失败|未成功送达|任务异常|读取失败/.test(a.note) ? 'whitespace-normal break-words text-amber-500' : 'truncate text-mist-300')} title={a.note}>{a.note}</p>}
+        {a.status === 'ok' && /未确认|网络请求失败|未成功送达/.test(a.note || '') && <p className="mt-1 text-xs text-amber-500">当前连接未确认；上方「可用」保留上次账号状态，不代表本次可生成。</p>}
       </div>
 
       <div className="mt-4 flex items-center gap-2">
