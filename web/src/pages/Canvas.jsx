@@ -955,11 +955,12 @@ export default function Canvas() {
     return () => clearInterval(timer);
   }, [runningCount, syncJobs]);
 
-  const focusNode = (node) => {
+  const focusNode = (node, minimumZoom = 0) => {
     const v = viewRef.current;
+    const z = Math.max(v.z, minimumZoom);
     setSelectedLink(null);
     setSelected([node.id]);
-    setView({ ...v, x: vpSize.w / 2 - (node.x + nodeW(node) / 2) * v.z, y: vpSize.h / 2 - (node.y + nodeH(node) / 2) * v.z });
+    setView({ ...v, z, x: vpSize.w / 2 - (node.x + nodeW(node) / 2) * z, y: vpSize.h / 2 - (node.y + nodeH(node) / 2) * z });
     setActivityOpen(false);
   };
 
@@ -1079,7 +1080,7 @@ export default function Canvas() {
     const nodes=arrangeNodes(plan.nodes,repairedLinks,n=>({width:nodeW(n),height:nodeH(n)})).map(n=>({...n,id:ids.get(n.id),x:n.x+offset}));
     const links=repairedLinks.map(l=>({from:ids.get(l.from),to:ids.get(l.to)}));
     setDoc(d=>({...d,nodes:[...d.nodes,...nodes],links:[...(d.links||[]),...links],storyboard:mergedShots}));
-    setSelected([nodes.find(n=>sends(n))?.id||nodes[0].id]);setSelectedLink(null);fitDocument({nodes,links});toast('已添加 '+nodes.length+' 个节点，可关闭工作台查看');
+    focusNode(nodes.find(n=>sends(n))||nodes[0],.85);toast('已添加 '+nodes.length+' 个节点，可关闭工作台编辑生成；适应画布可查看完整流程');
   };
 
   const setStoryboard = rows => {const cleaned=cleanShots(rows);setDoc(d=>({...d,storyboard:cleaned}));};
@@ -1308,7 +1309,7 @@ export default function Canvas() {
                 onPreview={(media) => { setPreviewScale(1); setPreviewMedia(media); }}
                 onOpenDirector={() => setDirectorId(n.id)}
                 onDelete={() => removeNode(n.id)}
-                onEditGenerate={() => focusNode(n)}
+                onEditGenerate={() => focusNode(n,.85)}
               />
             ))}
           </div>
