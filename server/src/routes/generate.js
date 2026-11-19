@@ -3,11 +3,12 @@ import path from 'node:path';
 import { Router } from 'express';
 import multer from 'multer';
 import { requireAuth } from '../auth.js';
-import { CFG, MEDIA_DIR } from '../config.js';
+import { CFG, MEDIA_DIR, usesMuse2api } from '../config.js';
 import {
-  db, uid, now, createJob, getJob, updateJob, listJobs, addCredits, priceOf, getSettings,
+  db, uid, now, getJob, listJobs, getSettings,
 } from '../db.js';
-import * as muse from '../muse.js';
+import { enqueueJob } from '../worker.js';
+import { referenceImage } from '../mediaRefs.js';
 
 const r = Router();
 
@@ -60,40 +61,6 @@ const MIME = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
-/** 把平台本地上传的参考素材转成 data URL，上游无需公网访问权限 */
-function toDataUrl(localUrl) {
-  const raw = String(localUrl || '');
-  const name = path.basename(raw);
-  if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) return null;
-  const dir = raw.startsWith('/media/') ? MEDIA_DIR : raw.startsWith('/uploads/') ? UPLOAD_DIR : null;
-  if (!dir) return null;
-  const file = path.join(dir, name);
-  if (!fs.existsSync(file)) return null;
-  const ext = path.extname(file).toLowerCase();
-  const mime = MIME[ext] || 'application/octet-stream';
-  const b64 = fs.readFileSync(file).toString('base64');
-  return `data:${mime};base64,${b64}`;
-}
-
-function normalizeRefs(list) {
-  if (!Array.isArray(list)) return [];
-  const out = [];
-  for (const item of list) {
-    if (!item) continue;
-    if (typeof item === 'string') {
-      if (item.startsWith('/uploads/') || item.startsWith('/media/')) {
-        const d = toDataUrl(item);
-        if (d) out.push({ url: d });
-      } else if (/^(https?:|data:)/i.test(item)) {
-        out.push({ url: item });
-      }
-    } else if (item.url) {
-      out.push(item);
-    }
-  }
-  return out;
-}
-
 /* ------------------------------ 上传 ------------------------------ */
 r.post('/upload', requireAuth, upload.array('files', 10), (req, res) => {
   const files = (req.files || []).map((f) => {
@@ -106,88 +73,41 @@ r.post('/upload', requireAuth, upload.array('files', 10), (req, res) => {
   res.json({ files });
 });
 
-/* ------------------------------ 视频 ------------------------------ */
-r.post('/videos', requireAuth, async (req, res) => {
-  const { prompt, duration = 5, size = '16:9', images = [], model = 'muse-video', extra = null } = req.body || {};
-  if (!prompt || String(prompt).trim().length < 2) {
-    return res.status(400).json({ error: '请填写画面描述' });
+/* ------------------------------ 生成 ------------------------------ */
+function submit(kind, req, res) {
+  const { prompt, duration = 5, size, images = [], extra } = req.body || {};
+  if (typeof prompt !== 'string' || prompt.trim().length < 2 || prompt.length > 100_000) {
+    return res.status(400).json({ error: '请输入 2 到 100000 字的提示词' });
   }
   const workspace = resolveWorkspace(req);
   if (workspace.error) return res.status(404).json({ error: workspace.error });
-  const dur = CFG.videoDurations.includes(Number(duration)) ? Number(duration) : 5;
-  const params = { duration: dur, size: CFG.videoSizes.includes(size) ? size : '16:9', images, extra };
-  const cost = priceOf('video', params);
-
-  const fresh = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
-  if (fresh.credits < cost) {
-    return res.status(402).json({ error: `积分不足，本次需要 ${cost}，当前 ${fresh.credits}` });
-  }
-
-  const job = createJob(req.user.id, 'video', String(prompt).trim(), params, cost);
-  updateJob(job.id, { project_id: workspace.projectId, canvas_id: workspace.canvasId });
-  addCredits(req.user.id, -cost, '创建视频任务', job.id);
 
   try {
-    const refs = normalizeRefs(images);
-    const payload = {
-      prompt: String(prompt).trim(),
-      model,
-      duration: dur,
-      size: params.size,
+    const maxReferences = usesMuse2api ? 3 : 1;
+    if (!Array.isArray(images) || images.length > maxReferences) {
+      return res.status(400).json({ error: '当前接入方式每个媒体任务最多支持 ' + maxReferences + ' 张参考图' });
+    }
+    for (const image of images) referenceImage(req.user.id, image, false);
+    const video = kind === 'video';
+    const sizes = video ? CFG.videoSizes : CFG.imageSizes;
+    const params = {
+      size: sizes.includes(size) ? size : video ? '16:9' : '1:1',
+      images: images.map(image => typeof image === 'string' ? image : image.url),
+      sourceNodeId: typeof req.body.sourceNodeId === 'string' ? req.body.sourceNodeId.slice(0,100) : null,
     };
-    if (refs.length) payload.images = refs;
-    if (extra) payload.extra = String(extra).slice(0, 500);
-
-    const out = await muse.createVideo(payload);
-    const upstreamId = out?.id || out?.task_id;
-    if (!upstreamId) throw new Error('上游未返回任务 ID');
-    updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 15 });
-    res.json({ job: getJob(job.id) });
-  } catch (e) {
-    updateJob(job.id, { status: 'failed', error: e.message, finished_at: Date.now() });
-    addCredits(req.user.id, cost, '任务创建失败退还', job.id);
-    updateJob(job.id, { refunded: 1 });
-    res.status(502).json({ error: `创建任务失败：${e.message}`, refunded: true });
+    if (video) {
+      params.duration = CFG.videoDurations.includes(Number(duration)) ? Number(duration) : 5;
+      if (typeof extra === 'string' && extra.trim()) params.extra = extra.trim().slice(0, 500);
+    }
+    const job = enqueueJob(req.user.id, kind, prompt.trim(), params, workspace);
+    return res.json({ job });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message });
   }
-});
+}
 
-/* ------------------------------ 图片 ------------------------------ */
-r.post('/images', requireAuth, async (req, res) => {
-  const { prompt, size = '1:1', images = [] } = req.body || {};
-  if (!prompt || String(prompt).trim().length < 2) {
-    return res.status(400).json({ error: '请填写提示词' });
-  }
-  const workspace = resolveWorkspace(req);
-  if (workspace.error) return res.status(404).json({ error: workspace.error });
-  const params = { size: CFG.imageSizes.includes(size) ? size : '1:1', images };
-  const cost = priceOf('image', params);
-
-  const fresh = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
-  if (fresh.credits < cost) {
-    return res.status(402).json({ error: `积分不足，本次需要 ${cost}，当前 ${fresh.credits}` });
-  }
-
-  const job = createJob(req.user.id, 'image', String(prompt).trim(), params, cost);
-  updateJob(job.id, { project_id: workspace.projectId, canvas_id: workspace.canvasId });
-  addCredits(req.user.id, -cost, '创建图片任务', job.id);
-
-  try {
-    const refs = normalizeRefs(images);
-    const payload = { prompt: String(prompt).trim(), model: 'muse-image', size: params.size };
-    if (refs.length) payload.images = refs;
-
-    const out = await muse.createImageTask(payload);
-    const upstreamId = out?.id || out?.task_id;
-    if (!upstreamId) throw new Error('上游未返回任务 ID');
-    updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 10 });
-    res.json({ job: getJob(job.id) });
-  } catch (e) {
-    updateJob(job.id, { status: 'failed', error: e.message, finished_at: Date.now() });
-    addCredits(req.user.id, cost, '任务创建失败退还', job.id);
-    updateJob(job.id, { refunded: 1 });
-    res.status(502).json({ error: `创建任务失败：${e.message}`, refunded: true });
-  }
-});
+r.post('/videos', requireAuth, (req, res) => submit('video', req, res));
+r.post('/images', requireAuth, (req, res) => submit('image', req, res));
 
 /* ------------------------------ 任务 ------------------------------ */
 r.get('/jobs', requireAuth, (req, res) => {
@@ -220,6 +140,7 @@ r.delete('/jobs/:id', requireAuth, (req, res) => {
   if (job.userId !== req.user.id && req.user.role !== 'admin') {
     return res.status(403).json({ error: '无权删除' });
   }
+  if (['queued', 'processing'].includes(job.status)) return res.status(409).json({ error: '生成中的任务暂不能删除' });
   if (job.mediaFile) {
     try { fs.unlinkSync(path.join(CFG.dataDir, 'media', job.mediaFile)); } catch { /* ignore */ }
   }

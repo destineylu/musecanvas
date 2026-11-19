@@ -3,7 +3,6 @@ import { Router } from 'express';
 import { requireAuth } from '../auth.js';
 import { db, uid, now } from '../db.js';
 import { CFG } from '../config.js';
-import * as muse from '../muse.js';
 
 const r = Router();
 
@@ -46,7 +45,7 @@ r.delete('/keys/:id', requireAuth, (req, res) => {
 });
 
 /* ------------------------ OpenAI 兼容代理层 ------------------------ */
-/** 用平台的 sk- key 鉴权，把请求转发给上游 muse2api */
+/** 用平台的 sk- key 鉴权，把请求转发给上游 API Bridge */
 export function apiKeyAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';

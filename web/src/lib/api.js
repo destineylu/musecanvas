@@ -3,7 +3,7 @@ const TOKEN_KEY = 'muse_studio_token';
 export const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
 export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
 
-async function request(path, { method = 'GET', body, form } = {}) {
+export async function request(path, { method = 'GET', body, form } = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -29,6 +29,14 @@ async function request(path, { method = 'GET', body, form } = {}) {
 }
 
 export const api = {
+  library: query => request('/api/library?'+new URLSearchParams(query)),
+  updateAsset: body => request('/api/library/item', {method:'PUT',body}),
+  canvasVersions: id => request('/api/workbench/'+encodeURIComponent(id)+'/versions'),
+  canvasVersion: (id,version) => request('/api/workbench/'+encodeURIComponent(id)+'/versions/'+encodeURIComponent(version)),
+  checkpoint: (id,body) => request('/api/workbench/'+encodeURIComponent(id)+'/versions',{method:'POST',body}),
+  generationHistory: id => request('/api/workbench/'+encodeURIComponent(id)+'/generations'),
+  canvasPlan: (id,prompt) => request('/api/workbench/'+encodeURIComponent(id)+'/plan',{method:'POST',body:{prompt}}),
+  localSession: () => request('/api/auth/local-session', { method: 'POST', body: {} }),
   register: (b) => request('/api/auth/register', { method: 'POST', body: b }),
   login: (b) => request('/api/auth/login', { method: 'POST', body: b }),
   invite: () => request('/api/auth/invite'),
@@ -48,6 +56,16 @@ export const api = {
   deleteCanvas: (id) => request(`/api/projects/canvases/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   meta: () => request('/api/meta'),
+  bridges: () => request('/api/bridges'),
+  saveBridge: (id, body) => request('/api/bridges' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PUT' : 'POST', body }),
+  deleteBridge: id => request('/api/bridges/' + encodeURIComponent(id), { method: 'DELETE' }),
+  testBridge: id => request('/api/bridges/' + encodeURIComponent(id) + '/test', { method: 'POST', body: {} }),
+  checkBridges: () => request('/api/bridges/health', { method: 'POST', body: {} }),
+  saveBridgeModels: models => request('/api/bridges/models', { method: 'PUT', body: { models } }),
+  saveBridgeSettings: body => request('/api/bridges/settings', { method: 'PUT', body }),
+  upstream: () => request('/api/upstream'),
+  setUpstream: mode => request('/api/upstream', { method: 'PUT', body: { mode } }),
+  bridgeStatus: () => request('/api/upstream/status'),
 
   accounts: () => request('/api/accounts'),
   refreshQuota: (accountId) => request('/api/accounts/quota', { method: 'POST', body: { accountId } }),
@@ -104,6 +122,7 @@ export const api = {
   transferCredits: (email, credits) => request('/api/team/transfer', { method: 'POST', body: { email, credits } }),
   joinTeam: (code) => request('/api/team/join', { method: 'POST', body: { code } }),
 
+  directorPlan: (b) => request('/api/director/plan', { method: 'POST', body: b }),
   chatModels: () => request('/api/chat/models'),
   chat: (b) => request('/api/chat', { method: 'POST', body: b }),
   canvasChat: (canvasId) => request(`/api/chat/canvases/${encodeURIComponent(canvasId)}`),

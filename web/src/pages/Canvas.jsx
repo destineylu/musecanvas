@@ -2,23 +2,37 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, Type, Image as ImageIcon, Video, Download, Trash2, ZoomIn, ZoomOut, Maximize, Loader2, Sparkles,
-  MousePointer2, ChevronDown, Map as MapIcon, Expand, Upload, Send, X,
+  ArrowLeft, Type, Image as ImageIcon, Video, Trash2, ZoomIn, ZoomOut, Maximize, Loader2, Sparkles,
+  MousePointer2, Map as MapIcon, Expand, Upload, Send, X, ListChecks, Crosshair, MessageSquare, Settings, Hand, Link2, CircleHelp, Clapperboard, GripVertical, FolderOpen, History, BookOpen, LayoutGrid,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
 import { useAuth } from '../store/auth.jsx';
 import { useToast } from '../components/ui.jsx';
 import ChatDrawer from '../components/ChatDrawer.jsx';
+import ShortcutsGuide from '../components/ShortcutsGuide.jsx';
+import DirectorStage from '../components/director/DirectorStage.jsx';
+import CanvasWorkbench from '../components/CanvasWorkbench.jsx';
+import { arrangeNodes, cleanShots } from '../../../shared/canvas-workflow.js';
+import ImageToolbar from '../components/canvas/ImageToolbar.jsx';
+import InpaintEditor from '../components/canvas/InpaintEditor.jsx';
+import PanoramaViewer from '../components/canvas/PanoramaViewer.jsx';
+import { GridSplitPanel } from '../components/canvas/ToolPanels.jsx';
+import { AngleStudio, LightingStudio } from '../components/canvas/Panels3D.jsx';
+import { IMAGE_SIZES, nearestImageSize, panoramaPrompt, splitImage } from '../components/canvas/imageTools.js';
+import '../canvas.css';
 
-const NODE_W = 260;
-const NODE_H = 170;
-const VIDEO_CONTROLS_WRAP_WIDTH = 272;
+const NODE_W = 280;
+const TEXT_H = 200;
+const CARD_PAD = 6;
+const HEAD_H = 30;
 const MINIMAP_W = 176;
 const MINIMAP_H = 116;
-const IMAGE_SIZES = ['1:1', '3:4', '4:3', '2:3', '3:2', '4:5', '5:4', '9:16', '16:9', '21:9'];
 const VIDEO_SIZES = ['9:16', '16:9', '1:1', '3:4', '4:3', '21:9'];
 const VIDEO_DURATIONS = [5, 6, 8, 10];
+
+const TASK_STAGES = { queued: '排队中', generating: '生成中', paused: '等待切回原上游', downloading: '下载素材', done: '已完成', failed: '生成失败' };
+const taskStage = (node) => node.status === 'running' ? (node.phase || 'generating') : node.status;
 
 function parseRatio(value) {
   const matched = String(value || '').match(/^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
@@ -30,37 +44,36 @@ function parseRatio(value) {
 
 function frameRatio(n) {
   if (!n) return 1;
-  if (n.intent === 'asset' && n.mediaW && n.mediaH) return n.mediaW / n.mediaH;
+  if (n.type === 'director') return parseRatio(n.director?.settings?.ratio?.replace('2.39:1', '239:100')) || 16 / 9;
+  if (n.mediaUrl && n.mediaW && n.mediaH) return n.mediaW / n.mediaH;
   if (sends(n)) return parseRatio(n.size) || (n.type === 'video' ? 16 / 9 : 1);
-  if (n.mediaW && n.mediaH) return n.mediaW / n.mediaH;
   return parseRatio(n.size) || 3 / 4;
 }
 
 function previewBox(n) {
   const ratio = frameRatio(n);
-  const width = ratio >= 1.7 ? 320 : ratio <= 0.72 ? 210 : 248;
-  const height = Math.round(Math.min(560, Math.max(120, width / ratio)));
+  const width = ratio >= 3 ? 420 : ratio >= 1.7 ? 360 : ratio <= 0.72 ? 230 : 280;
+  const height = Math.round(Math.min(600, Math.max(96, width / ratio)));
   return { width, height, ratio };
 }
 
 function nodeW(n) {
   if (!n) return NODE_W;
   if (n.type === 'text') return n.width || NODE_W;
-  return previewBox(n).width + 28;
+  return previewBox(n).width + CARD_PAD * 2;
 }
 
 function sends(n) {
-  if (!n || n.type === 'text') return false;
+  if (!n || n.type === 'text' || n.type === 'director') return false;
   if (n.intent === 'asset') return false;
   if (n.intent === 'generate') return true;
   return !n.mediaUrl || !!n.jobId;
 }
 
 const nodeH = (n) => {
-  if (!n) return NODE_H;
-  if (n.type === 'text') return n.height || 184;
-  const wrapsVideoControls = n.type === 'video' && sends(n) && previewBox(n).width < VIDEO_CONTROLS_WRAP_WIDTH;
-  return previewBox(n).height + (sends(n) ? 204 + (wrapsVideoControls ? 40 : 0) : 86) + (n.mediaUrl ? 40 : 0);
+  if (!n) return TEXT_H;
+  if (n.type === 'text') return n.height || TEXT_H;
+  return previewBox(n).height + CARD_PAD * 2;
 };
 
 function mediaFilesFromList(list) {
@@ -163,15 +176,32 @@ export default function Canvas() {
   const [previewMedia, setPreviewMedia] = useState(null);
   const [previewScale, setPreviewScale] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [upstream, setUpstream] = useState(null);
+  useEffect(() => {
+    let active = true;
+    const sync = () => api.upstream().then(data => { if (active) setUpstream(data); }).catch(() => {});
+    sync();
+    window.addEventListener('focus', sync);
+    window.addEventListener('muse-upstream-changed', sync);
+    return () => { active = false; window.removeEventListener('focus', sync); window.removeEventListener('muse-upstream-changed', sync); };
+  }, []);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [panTool, setPanTool] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [saved, setSaved] = useState(true);
   const [saveError, setSaveError] = useState(false);
-  const [price, setPrice] = useState({ videoBase: 10, videoPerSecond: 2, image: 5 });
   const [vpSize, setVpSize] = useState({ w: 800, h: 500 });
   const [draft, setDraft] = useState(null);
   const [menu, setMenu] = useState(null);
   const [selectionRect, setSelectionRect] = useState(null);
   const [canvasGesture, setCanvasGesture] = useState('idle');
+  const [tool, setTool] = useState(null);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [directorId, setDirectorId] = useState(null);
+  const [workbench, setWorkbench] = useState(null);
+  const [minimapOpen, setMinimapOpen] = useState(() => { try { return localStorage.getItem('mua_minimap') !== '0'; } catch { return true; } });
   const clipboardKey = `mua_canvas_clipboard_${user?.id || user?.email || 'account'}`;
 
   const viewportRef = useRef(null);
@@ -207,7 +237,6 @@ export default function Canvas() {
       const loadedDoc = Array.isArray(document?.nodes) && Array.isArray(document?.links)
         ? document
         : defaultDoc();
-      if (!loadedDoc.nodes.length) loadedDoc.nodes = defaultDoc().nodes;
       setDoc(loadedDoc);
       setView(document?.view && Number.isFinite(document.view.z) ? document.view : { x: 0, y: 0, z: 1 });
       setCanvasInfo(canvas);
@@ -220,10 +249,6 @@ export default function Canvas() {
     });
     return () => { active = false; };
   }, [canvasId, nav, toast]);
-
-  useEffect(() => {
-    api.meta().then((m) => { if (m?.price) setPrice(m.price); }).catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!canvasLoaded) return undefined;
@@ -264,7 +289,6 @@ export default function Canvas() {
 
   const onWheel = (e) => {
     e.preventDefault();
-    if (!e.ctrlKey) return;
     const rect = viewportRef.current?.getBoundingClientRect();
     const cx = rect ? e.clientX - rect.left : undefined;
     const cy = rect ? e.clientY - rect.top : undefined;
@@ -274,7 +298,13 @@ export default function Canvas() {
   useEffect(() => {
     const handleWheel = (event) => {
       const viewport = viewportRef.current;
-      if (!viewport || !viewport.contains(event.target)) return;
+      const studio = viewport?.closest('.mua-viewport');
+      if (!viewport || !studio?.contains(event.target)) return;
+      // 面板、对话框、菜单内部保留自身滚动；其余位置（含节点、工具条、提示词编辑器）滚轮缩放画布。
+      if (event.target.closest?.('.mf-tool-panel, .muse-assistant, .mf-task-panel, .mf-menu, .muse-minimap')) {
+        if (event.ctrlKey) event.preventDefault();
+        return;
+      }
       const textarea = event.target.closest?.('textarea');
       if (textarea && !event.ctrlKey) {
         const maxScrollTop = textarea.scrollHeight - textarea.clientHeight;
@@ -290,9 +320,27 @@ export default function Canvas() {
     return () => window.removeEventListener('wheel', handleWheel, true);
   }, []);
 
+  useEffect(() => {
+    const down = (event) => {
+      if (event.code !== 'Space' || event.altKey || event.ctrlKey || event.metaKey ||
+          event.target.closest?.('textarea, input, button, select, a, [contenteditable]')) return;
+      event.preventDefault();
+      setSpaceHeld(true);
+    };
+    const release = (event) => { if (event.type === 'blur' || event.code === 'Space') setSpaceHeld(false); };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', release);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', release);
+      window.removeEventListener('blur', release);
+    };
+  }, []);
+
   const onBackgroundDown = (e) => {
     if (e.button === 2) return;
-    if (e.button === 1) {
+    if (e.button === 1 || (e.button === 0 && (spaceHeld || panTool))) {
       e.preventDefault();
       setCanvasGesture('pan');
       setMenu(null);
@@ -331,7 +379,12 @@ export default function Canvas() {
       return;
     }
     if (e.button !== 0) return;
-    if (e.target.closest('[data-port], textarea, button, input, select')) return;
+    if (!e.target.closest('[data-drag-handle]') && e.target.closest('[data-port], textarea, button, input, select')) return;
+    if (spaceHeld || panTool) {
+      e.stopPropagation();
+      onBackgroundDown(e);
+      return;
+    }
     e.stopPropagation();
     setSelectedLink(null);
     const alreadySelected = selected.includes(node.id);
@@ -490,6 +543,7 @@ export default function Canvas() {
 
   useEffect(() => {
     const onKey = (e) => {
+      if (workbench) return;
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'c') {
@@ -524,6 +578,7 @@ export default function Canvas() {
         setSelectedLink(null);
       }
       if (e.key === 'Escape') {
+        setTool(null);
         setSelected([]);
         setSelectedLink(null);
         setMenu(null);
@@ -532,7 +587,7 @@ export default function Canvas() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, selectedLink, doc, clipboardKey, toast]);
+  }, [selected, selectedLink, doc, clipboardKey, toast, workbench]);
 
   const centerPoint = () => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -582,13 +637,29 @@ export default function Canvas() {
       x: Math.round(center.x - nodeW({ type, intent: extra.intent || (type === 'text' ? 'input' : 'generate'), size: type === 'video' ? '16:9' : '1:1' }) / 2),
       y: Math.round(center.y - 36),
       text: type === 'text' ? (extra.text || '在这里写下提示词') : '',
-      label: extra.label || (type === 'text' ? '文本' : type === 'image' ? '制作图片' : '制作视频'),
+      label: extra.label || (type === 'text' ? '文本' : type === 'image' ? '图片生成' : '视频生成'),
       ...(type === 'text' && extra.width ? { width: extra.width } : {}),
       ...(type === 'text' && extra.height ? { height: extra.height } : {}),
       size: type === 'video' ? '16:9' : '1:1',
       duration: 5,
       status: 'idle',
     };
+    if (type === 'director' && !point) {
+      const anchor = doc.nodes.find(item => selected.includes(item.id));
+      n.x = anchor ? anchor.x + nodeW(anchor) + 64 : Math.round(center.x + 48);
+      n.y = anchor ? anchor.y : Math.round(center.y - nodeH(n) / 2);
+      const overlaps = () => doc.nodes.some(item => n.x < item.x + nodeW(item) + 24 && n.x + nodeW(n) + 24 > item.x && n.y < item.y + nodeH(item) + 36 && n.y + nodeH(n) + 36 > item.y);
+      for (let attempt = 0; attempt <= doc.nodes.length && overlaps(); attempt++) n.y += nodeH(n) + 52;
+      setView(v => {
+        const rect = viewportRef.current?.getBoundingClientRect();
+        if (!rect) return v;
+        const left = v.x + n.x * v.z, top = v.y + n.y * v.z;
+        const right = left + nodeW(n) * v.z, bottom = top + nodeH(n) * v.z;
+        const dx = left < 40 ? 40 - left : right > rect.width - 40 ? rect.width - 40 - right : 0;
+        const dy = top < 64 ? 64 - top : bottom > rect.height - 96 ? rect.height - 96 - bottom : 0;
+        return dx || dy ? { ...v, x: v.x + dx, y: v.y + dy } : v;
+      });
+    }
     setDoc((d) => ({ ...d, nodes: [...d.nodes, n] }));
     setSelected([n.id]);
     setSelectedLink(null);
@@ -650,6 +721,15 @@ export default function Canvas() {
     setDoc((d) => pruneLinks({ ...d, nodes: d.nodes.filter((n) => !selected.includes(n.id)) }));
     setSelected([]);
     setSelectedLink(null);
+  };
+
+  const removeNode = id => {
+    setDoc(d => pruneLinks({ ...d, nodes: d.nodes.filter(n => n.id !== id) }));
+    setSelected(current => current.filter(nodeId => nodeId !== id));
+    setSelectedLink(null);
+    setTool(current => current?.nodeId === id ? null : current);
+    setDirectorId(current => current === id ? null : current);
+    setMenu(null);
   };
 
   const fitView = () => {
@@ -761,7 +841,7 @@ export default function Canvas() {
 
   const generateNode = async (nodeId) => {
     const node = doc.nodes.find((n) => n.id === nodeId);
-    if (!node || !sends(node)) return;
+    if (!node || !sends(node) || busy || node.status === 'running') return;
     const mode = node.type === 'video' ? 'video' : 'image';
     const sizes = mode === 'video' ? VIDEO_SIZES : IMAGE_SIZES;
     const size = sizes.includes(node.size) ? node.size : (mode === 'video' ? '16:9' : '1:1');
@@ -771,23 +851,25 @@ export default function Canvas() {
     const fromText = incoming.filter((n) => n.type === 'text' && n.text?.trim()).map((n) => n.text.trim());
     const finalPrompt = [own, ...fromText.filter((t) => t !== own)].filter(Boolean).join('\n');
     if (finalPrompt.length < 2) return toast('先在节点里写提示词，或连入一个文本节点', 'error');
-    const cost = mode === 'image'
-      ? Number(price.image)
-      : Number(price.videoBase) + Number(price.videoPerSecond) * duration;
-    if ((user?.credits ?? 0) < cost) return toast(`积分不足，本次需要 ${cost}`, 'error');
-    const images = [];
-    for (const n of incoming) {
-      if (n.type === 'image' && n.mediaUrl && !images.includes(n.mediaUrl)) images.push(n.mediaUrl);
+    const images = node.refImage ? [node.refImage] : [];
+    if (!node.refImage) {
+      for (const n of incoming) {
+        if (n.type === 'image' && n.mediaUrl && !images.includes(n.mediaUrl)) images.push(n.mediaUrl);
+      }
     }
 
+    const maxReferences = upstream?.maxReferences;
+    if (maxReferences && images.length > maxReferences) return toast('当前接入方式最多支持 ' + maxReferences + ' 张参考图', 'error');
     setBusy(true);
     try {
+      await checkpoint('生成前备份');
       const body = {
         prompt: finalPrompt,
         size,
-        images: images.slice(0, 3),
+        images,
         projectId: canvasInfo.projectId,
         canvasId: canvasInfo.id,
+        sourceNodeId: nodeId,
       };
       const { job } = mode === 'image'
         ? await api.createImage(body)
@@ -803,6 +885,7 @@ export default function Canvas() {
           jobId: job.id,
           status: 'running',
           progress: job.progress || 0,
+          phase: job.phase,
           error: null,
           mediaUrl: null,
         } : n),
@@ -833,33 +916,50 @@ export default function Canvas() {
   };
 
   const syncJobs = useCallback(async () => {
-    const running = doc.nodes.filter((n) => n.jobId && n.status === 'running');
+    const running = docRef.current.nodes.filter(n => n.jobId && n.status === 'running');
     if (!running.length) return;
-    const results = await Promise.all(
-      running.map(async (n) => {
-        try { return { id: n.id, job: (await api.job(n.jobId)).job }; } catch { return null; }
-      })
-    );
-    setDoc((d) => ({
-      ...d,
-      nodes: d.nodes.map((n) => {
-        const hit = results.find((r) => r?.id === n.id)?.job;
-        if (!hit) return n;
-        if (hit.status === 'completed') {
-          return { ...n, status: 'done', mediaUrl: hit.mediaUrl || hit.result?.localUrl || hit.result?.url };
-        }
-        if (hit.status === 'failed') return { ...n, status: 'failed', error: hit.error };
-        return { ...n, progress: hit.progress };
-      }),
+    const results = await Promise.all(running.map(async n => {
+      try { return [n.jobId, (await api.job(n.jobId)).job]; }
+      catch { return [n.jobId, null]; }
     }));
-  }, [doc.nodes]);
+    const jobs = new Map(results);
+    setDoc(current => {
+      let changed = false;
+      const nodes = current.nodes.map(node => {
+        if (node.status !== 'running') return node;
+        const job = jobs.get(node.jobId);
+        if (!job) return node;
+        if (job.status === 'completed') {
+          changed = true;
+          return { ...node, status: 'done', phase: 'done', mediaUrl: job.mediaUrl || job.result?.localUrl || job.result?.url };
+        }
+        if (job.status === 'failed') {
+          changed = true;
+          return { ...node, status: 'failed', phase: 'failed', error: job.error };
+        }
+        if (node.phase === job.phase && node.progress === job.progress) return node;
+        changed = true;
+        return { ...node, phase: job.phase, progress: job.progress };
+      });
+      return changed ? { ...current, nodes } : current;
+    });
+    if (results.some(([, job]) => job?.status === 'failed')) refresh();
+  }, [refresh]);
 
+  const runningCount = doc.nodes.filter(n => n.jobId && n.status === 'running').length;
   useEffect(() => {
-    const hasRunning = doc.nodes.some((n) => n.jobId && n.status === 'running');
-    if (!hasRunning) return undefined;
-    const t = setInterval(syncJobs, 2500);
-    return () => clearInterval(t);
-  }, [doc.nodes, syncJobs]);
+    if (!runningCount) return;
+    const timer = setInterval(syncJobs, 2500);
+    return () => clearInterval(timer);
+  }, [runningCount, syncJobs]);
+
+  const focusNode = (node) => {
+    const v = viewRef.current;
+    setSelectedLink(null);
+    setSelected([node.id]);
+    setView({ ...v, x: vpSize.w / 2 - (node.x + nodeW(node) / 2) * v.z, y: vpSize.h / 2 - (node.y + nodeH(node) / 2) * v.z });
+    setActivityOpen(false);
+  };
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -867,7 +967,197 @@ export default function Canvas() {
     const ro = new ResizeObserver(() => setVpSize({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [canvasLoaded]);
+
+  /* ------------------------- 图片工具：派生节点 ------------------------- */
+
+  const freeSpotBeside = (source, w, h, index = 0) => {
+    const nodes = docRef.current.nodes;
+    const x = Math.round(source.x + nodeW(source) + 120);
+    let y = Math.round(source.y + index * (h + 70));
+    const hit = (yy) => nodes.some((n) => n.x < x + w && n.x + nodeW(n) > x && n.y - HEAD_H < yy + h && n.y + nodeH(n) > yy - HEAD_H);
+    for (let i = 0; i < 40 && hit(y); i++) y += 90;
+    return { x, y };
+  };
+
+  const createDerived = async (source, { label, prompt, size, refImage }) => {
+    const finalSize = IMAGE_SIZES.includes(size) ? size : nearestImageSize(source.mediaW, source.mediaH);
+    try {
+      const { job } = await api.createImage({
+        prompt, size: finalSize, images: [refImage || source.mediaUrl], projectId: canvasInfo.projectId, canvasId: canvasInfo.id,
+      });
+      const draftNode = { type: 'image', intent: 'generate', size: finalSize };
+      const spot = freeSpotBeside(source, nodeW(draftNode), nodeH(draftNode));
+      const node = {
+        id: newId(), type: 'image', intent: 'generate', label, text: prompt, size: finalSize, duration: 5,
+        ...(refImage ? { refImage } : {}),
+        jobId: job.id, status: 'running', progress: job.progress || 0, phase: job.phase, error: null, mediaUrl: null, ...spot,
+      };
+      setDoc((d) => addLink({ ...d, nodes: [...d.nodes, node] }, source.id, node.id));
+      setSelected([node.id]);
+      setSelectedLink(null);
+      toast(`${label}任务已提交`, 'ok');
+      refresh();
+      return node;
+    } catch (error) {
+      toast(error.message, 'error');
+      throw error;
+    }
+  };
+
+  const uploadAll = async (files) => {
+    const out = [];
+    for (let i = 0; i < files.length; i += 10) {
+      const { files: saved = [] } = await api.upload(files.slice(i, i + 10));
+      out.push(...saved);
+    }
+    if (out.length !== files.length) throw new Error('部分图片上传失败');
+    return out;
+  };
+
+  const placeAssets = (source, items, cols) => {
+    const sample = { type: items[0].type || 'image', intent: 'asset', mediaUrl: 'x', mediaW: items[0].w, mediaH: items[0].h };
+    const w = nodeW(sample);
+    const h = nodeH(sample);
+    const origin = freeSpotBeside(source, w * cols + 40 * (cols - 1), h);
+    const nodes = items.map((item, i) => ({
+      id: newId(), type: item.type || 'image', intent: 'asset', label: item.label, text: item.name || '', mediaUrl: item.url,
+      mediaW: item.w, mediaH: item.h, status: 'done', size: '1:1', duration: 5,
+      x: origin.x + (i % cols) * (w + 40), y: origin.y + Math.floor(i / cols) * (h + HEAD_H + 40),
+    }));
+    setDoc((d) => nodes.reduce((acc, n) => addLink(acc, source.id, n.id), { ...d, nodes: [...d.nodes, ...nodes] }));
+    setSelected(nodes.map((n) => n.id));
+    setSelectedLink(null);
+  };
+
+  const checkpoint = label => api.checkpoint(canvasInfo.id,{label,document:{...docRef.current,view:viewRef.current}});
+
+  const fitDocument = document => {
+    if(!document.nodes.length)return;
+    const rect=viewportRef.current?.getBoundingClientRect();if(!rect)return;
+    const minX=Math.min(...document.nodes.map(n=>n.x)),minY=Math.min(...document.nodes.map(n=>n.y));
+    const maxX=Math.max(...document.nodes.map(n=>n.x+nodeW(n))),maxY=Math.max(...document.nodes.map(n=>n.y+nodeH(n)));
+    const z=Math.max(.08,Math.min(1,(rect.width-140)/Math.max(1,maxX-minX),(rect.height-180)/Math.max(1,maxY-minY)));
+    setView({z,x:(rect.width-(maxX-minX)*z)/2-minX*z,y:90-minY*z});
+  };
+
+  const restoreDocument = async (document,label) => {
+    const {jobs}=await api.generationHistory(canvasInfo.id);
+    if(jobs.some(j=>['queued','processing'].includes(j.status)))throw Error('当前画布还有生成任务，请完成后再回退');
+    await checkpoint('回退前备份');
+    const restored=structuredClone(document);
+    restored.nodes=restored.nodes.map(n=>{
+      const job=jobs.find(j=>j.id===n.jobId);
+      if(!job)return n.status==='running'?{...n,status:'failed',error:'此历史任务已不可恢复'}:n;
+      return {...n,status:job.status==='completed'?'done':job.status==='failed'?'failed':n.status,phase:job.phase,mediaUrl:job.mediaUrl||n.mediaUrl,error:job.error||null};
+    });
+    setDoc(restored);setSelected([]);setSelectedLink(null);setTool(null);
+    fitDocument(restored);toast(label||'已恢复画布版本');
+  };
+
+  const insertLibraryAssets = async assets => {
+    try{
+      await checkpoint('插入素材前');
+      const point=centerPoint(),current=docRef.current;
+      const right=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+nodeW(n)))+80:point.x;
+      const nodes=assets.slice(0,30).map((a,i)=>({id:newId(),type:a.type==='video'?'video':'image',intent:'asset',label:(a.label||a.name||'素材').slice(0,80),mediaUrl:a.url,text:a.prompt||'',status:'done',size:'16:9',duration:5,x:right,y:point.y+i*350}));
+      setDoc(d=>({...d,nodes:[...d.nodes,...nodes]}));setSelected(nodes.map(n=>n.id));setSelectedLink(null);setWorkbench(null);
+      if(nodes.length)fitDocument({nodes,links:[]});toast('素材已加入画布');
+    }catch(e){toast(e.message,'error');}
+  };
+
+  const applyWorkflow = async plan => {
+    if(docRef.current.nodes.length+plan.nodes.length>2000)throw Error('画布最多支持 2000 个节点');
+    if(!plan.nodes.length)throw Error('方案没有可应用的节点');
+    const mergedShots=plan.fromStoryboard?cleanShots(docRef.current.storyboard||[]):cleanShots([...(docRef.current.storyboard||[]),...(plan.storyboard||[]).map(s=>({...s,id:newId()}))]);
+    await checkpoint('应用流程前备份');
+    const current=docRef.current,ids=new Map(plan.nodes.map(n=>[n.id,newId()]));
+    const offset=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+nodeW(n)))+120:0;
+    const nodes=arrangeNodes(plan.nodes,plan.links,n=>({width:nodeW(n),height:nodeH(n)})).map(n=>({...n,id:ids.get(n.id),x:n.x+offset}));
+    const links=plan.links.map(l=>({from:ids.get(l.from),to:ids.get(l.to)}));
+    setDoc(d=>({...d,nodes:[...d.nodes,...nodes],links:[...(d.links||[]),...links],storyboard:mergedShots}));
+    setSelected([nodes.find(n=>sends(n))?.id||nodes[0].id]);setSelectedLink(null);fitDocument({nodes,links});toast('已添加 '+nodes.length+' 个节点，可关闭工作台查看');
+  };
+
+  const setStoryboard = rows => {const cleaned=cleanShots(rows);setDoc(d=>({...d,storyboard:cleaned}));};
+
+  const applyHistoricalResult = async job => {
+    const target=docRef.current.nodes.find(n=>selected.includes(n.id)&&n.type===job.type);
+    if(!target||target.status==='running')throw Error('请先选择一个未在生成的同类型节点');
+    await checkpoint('替换历史生成结果前');
+    patchNode(target.id,{mediaUrl:job.mediaUrl,jobId:job.id,status:'done',phase:'done',error:null,text:job.prompt,size:job.params.size||target.size,duration:job.params.duration||target.duration});
+    toast('已应用历史结果');
+  };
+
+  const reuseHistoricalPrompt = job => applyWorkflow({title:'复用生成参数',nodes:[{id:'reuse',type:job.type,intent:'generate',label:'复用历史提示词',text:job.prompt,size:job.params.size||'16:9',duration:job.params.duration||5,status:'idle',x:0,y:0}],links:[]});
+
+  const autoArrange = async () => {
+    try{await checkpoint('自动整理前');const current=docRef.current;const next={...current,nodes:arrangeNodes(current.nodes,current.links,n=>({width:nodeW(n),height:nodeH(n)}))};setDoc(next);fitDocument(next);toast('画布已按连线整理，可在历史中回退');}catch(e){toast(e.message,'error');}
+  };
+
+  const runGridSplit = async (source, { rows, cols }) => {
+    try {
+      const { files, width, height } = await splitImage(source.mediaUrl, rows, cols);
+      const saved = await uploadAll(files);
+      placeAssets(source, saved.map((f, i) => ({
+        ...f, label: `${source.label || '图片'} · ${Math.floor(i / cols) + 1}-${(i % cols) + 1}`,
+        w: Math.round(width / cols), h: Math.round(height / rows),
+      })), cols);
+      toast(`已切分为 ${files.length} 个图片节点`, 'ok');
+    } catch (error) {
+      toast(`宫格切分失败：${error.message}`, 'error');
+      throw error;
+    }
+  };
+
+  const runShotsExport = async (source, shots, kind = '全景截图') => {
+    try {
+      const saved = await uploadAll(shots.map((s) => s.file));
+      placeAssets(source, saved.map((f, i) => ({ ...f, label: shots[i].label, w: shots[i].width || 1280, h: shots[i].height || 720 })), Math.min(kind === '关键帧' ? 4 : 2, saved.length));
+      toast(saved.length > 1 ? `已创建 ${saved.length} 张${kind}` : `已创建${kind}`, 'ok');
+    } catch (error) {
+      toast(`${kind}保存失败：${error.message}`, 'error');
+      throw error;
+    }
+  };
+
+  const runInpaint = async (source, { file, prompt }) => {
+    let guide;
+    try {
+      [guide] = await uploadAll([file]);
+    } catch (error) {
+      toast(`标注图上传失败：${error.message}`, 'error');
+      throw error;
+    }
+    await createDerived(source, { label: '局部重绘', prompt, size: nearestImageSize(source.mediaW, source.mediaH), refImage: guide.url });
+  };
+
+  const openTool = (node, kind, option) => {
+    if (kind === 'panorama') {
+      const [action, mode] = String(option).split(':');
+      if (action === 'preview') return setTool({ kind: 'panorama', nodeId: node.id, mode });
+      createDerived(node, {
+        label: mode === 'sphere' ? '720° 全景图' : '360° 环绕图',
+        prompt: panoramaPrompt(mode),
+        size: mode === 'sphere' ? '2:1' : '4:1',
+      }).catch(() => {});
+      return undefined;
+    }
+    setTool((t) => (t?.kind === kind && t.nodeId === node.id ? null : { kind, nodeId: node.id }));
+    return undefined;
+  };
+
+  useEffect(() => {
+    if (tool && !doc.nodes.some((n) => n.id === tool.nodeId && n.mediaUrl)) setTool(null);
+  }, [doc.nodes, tool]);
+
+  useEffect(() => {
+    if (tool && !['inpaint', 'panorama', 'light', 'angle'].includes(tool.kind) && !selected.includes(tool.nodeId)) setTool(null);
+  }, [selected, tool]);
+
+  useEffect(() => {
+    try { localStorage.setItem('mua_minimap', minimapOpen ? '1' : '0'); } catch { /* 仅影响本机偏好 */ }
+  }, [minimapOpen]);
 
   const nodeById = Object.fromEntries(doc.nodes.map((n) => [n.id, n]));
   const links = (doc.links || []).filter((l) => nodeById[l.from] && nodeById[l.to]);
@@ -886,46 +1176,54 @@ export default function Canvas() {
     return <div className="grid h-full min-h-64 place-items-center"><Loader2 size={24} className="animate-spin text-brand-500" /></div>;
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="frost sticky top-0 z-30 flex shrink-0 items-center justify-between gap-4 border-b border-[#e6eaf2] px-7 py-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <button
-            type="button"
-            onClick={() => nav(canvasInfo.isScratch ? '/scratch' : `/projects/${canvasInfo.projectId}`)}
-            className="mt-1 inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-[#e6eaf2] bg-white px-3 text-[12px] font-medium text-[#3c4458] transition hover:border-brand-400/40 hover:text-brand-500"
-          >
-            <ArrowLeft size={14} /> 返回{canvasInfo.isScratch ? '画布列表' : '项目'}
-          </button>
-          <div className="min-w-0">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-mist-400">
-            {canvasInfo.isScratch ? (
-              <button onClick={() => nav('/scratch')} className="transition hover:text-brand-500">Mua 画布</button>
-            ) : (
-              <button onClick={() => nav(`/projects/${canvasInfo.projectId}`)} className="transition hover:text-brand-500">{canvasInfo.projectName}</button>
-            )}
-            <span>/</span>
-            <span>{canvasInfo.name}</span>
-          </div>
-          <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight text-[#171a24]">
-            {canvasInfo.name}
-            <span className="h-2 w-2 rounded-full bg-brand-400 shadow-[0_0_10px_rgba(91,108,255,.65)]" />
-          </h1>
-          <p className="mt-1 text-[12.5px] text-mist-400">左键选择或框选，中键拖动画布，Ctrl+滚轮缩放，文字框内滚轮滚动提示词</p>
-          </div>
-        </div>
-        <span className="flex items-center gap-1.5 text-[11.5px] text-mist-400">
-          <span className={clsx('h-1.5 w-1.5 rounded-full', saveError ? 'bg-rose-400' : saved ? 'bg-brand-400' : 'bg-mist-400')} />
-          {saveError ? '保存失败' : saved ? '已自动保存' : '保存中'}
-        </span>
-      </div>
+  /* ------------------------- 屏幕坐标的浮层 ------------------------- */
+  const screenRect = (n) => ({
+    left: view.x + n.x * view.z,
+    top: view.y + n.y * view.z,
+    width: nodeW(n) * view.z,
+    height: nodeH(n) * view.z,
+  });
+  const focused = selected.length === 1 ? nodeById[selected[0]] : null;
+  const gestureIdle = canvasGesture === 'idle' && !draft;
+  const showToolbar = focused && focused.type === 'image' && focused.mediaUrl && focused.status !== 'running' && gestureIdle;
+  const showComposer = focused && sends(focused) && gestureIdle;
+  const focusedRect = focused ? screenRect(focused) : null;
+  const clampX = (center, half) => Math.min(Math.max(center, half + 8), Math.max(half + 8, vpSize.w - half - 8));
+  const toolbarStyle = focusedRect && {
+    left: clampX(focusedRect.left + focusedRect.width / 2, 300),
+    top: Math.max(62, focusedRect.top - 28 * Math.max(view.z, Math.min(1, 2.2 * view.z)) - 52),
+  };
+  const composerWidth = focusedRect ? Math.min(560, Math.max(420, focusedRect.width), Math.max(200,vpSize.w-24)) : 0;
+  const composerStyle = focusedRect && {
+    left: clampX(focusedRect.left + focusedRect.width / 2, composerWidth / 2),
+    top: Math.max(70,Math.min(focusedRect.top + focusedRect.height + 14,vpSize.h-240)),
+    width: composerWidth,
+  };
+  const toolNode = tool ? nodeById[tool.nodeId] : null;
+  const toolRect = toolNode ? screenRect(toolNode) : null;
+  const panelStyle = (() => {
+    if (!toolRect) return undefined;
+    const W = 372;
+    let left = toolRect.left + toolRect.width + 18;
+    if (left + W > vpSize.w - 8) left = toolRect.left - W - 18;
+    left = Math.min(Math.max(8, left), Math.max(8, vpSize.w - W - 8));
+    const floor = showToolbar && toolbarStyle ? toolbarStyle.top + 56 : 70;
+    const top = Math.min(Math.max(floor, toolRect.top - HEAD_H * view.z), Math.max(floor, vpSize.h - 420));
+    return { left, top, maxHeight: vpSize.h - top - 12 };
+  })();
+  const focusedIncoming = focused
+    ? doc.nodes.filter((n) => links.some((l) => l.from === n.id && l.to === focused.id))
+    : [];
 
-      <div className="relative mx-5 mb-5 min-h-0 flex-1 overflow-hidden rounded-2xl border border-[#e6eaf2] bg-white shadow-[0_18px_40px_-30px_rgba(40,50,90,.45)]">
+  return (
+    <div className="mua-studio mf-studio relative h-full min-h-0">
+      <div className="muse-workbench relative h-full min-h-0 min-w-0">
+      <div className="mua-viewport relative h-full min-h-0 min-w-0 overflow-hidden">
         <div
           ref={viewportRef}
           data-canvasbg="1"
           onMouseDown={onBackgroundDown}
-          onDoubleClick={openMenuAt}
+          onDoubleClick={(event) => { if (!panTool && !spaceHeld) openMenuAt(event); }}
           onMouseMove={(e) => { hoverRef.current = screenToCanvas(e.clientX, e.clientY); }}
           onDragOver={(e) => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); }}
           onDrop={(e) => {
@@ -939,7 +1237,7 @@ export default function Canvas() {
             }
           }}
           onContextMenu={(e) => e.preventDefault()}
-          className={clsx('dot-grid absolute inset-0 select-none', canvasGesture === 'pan' ? 'cursor-grabbing' : canvasGesture === 'select' ? 'cursor-crosshair' : 'cursor-default')}
+          className={clsx('dot-grid absolute inset-0 select-none', canvasGesture === 'pan' ? 'cursor-grabbing' : canvasGesture === 'select' ? 'cursor-crosshair' : (spaceHeld || panTool) ? 'cursor-grab' : 'cursor-default')}
           style={{
             backgroundSize: `${22 * view.z}px ${22 * view.z}px`,
             backgroundPosition: `${view.x}px ${view.y}px`,
@@ -950,13 +1248,6 @@ export default function Canvas() {
             style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})` }}
           >
             <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width="1" height="1">
-              <defs>
-                <linearGradient id="edge-live" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stopColor="#4f7cff" />
-                  <stop offset="55%" stopColor="#7a5cff" />
-                  <stop offset="100%" stopColor="#b14cff" />
-                </linearGradient>
-              </defs>
               {links.map((l) => {
                 const a = nodeById[l.from];
                 const b = nodeById[l.to];
@@ -964,6 +1255,7 @@ export default function Canvas() {
                 const p2 = portPoint(b, 'in');
                 const d = bezier(p1.x, p1.y, p2.x, p2.y);
                 const on = selectedLink && selectedLink.from === l.from && selectedLink.to === l.to;
+                const related = focused && (l.from === focused.id || l.to === focused.id);
                 return (
                   <g key={`${l.from}-${l.to}`}>
                     <path
@@ -973,7 +1265,6 @@ export default function Canvas() {
                       strokeWidth="14"
                       className="pointer-events-auto cursor-pointer"
                       onMouseDown={(e) => {
-                        if (e.button === 1) return;
                         if (e.button !== 0) return;
                         e.stopPropagation();
                         setSelected([]);
@@ -991,16 +1282,12 @@ export default function Canvas() {
                     <path
                       d={d}
                       fill="none"
-                      stroke={on ? 'url(#edge-live)' : '#7b84a5'}
-                      strokeWidth={on ? 2.2 : 1.5}
-                      strokeOpacity="0.6"
+                      className={clsx('mf-link', b.status === 'running' && 'is-flow', (on || related) && 'is-on')}
                     />
                   </g>
                 );
               })}
-              {draftPath && (
-                <path d={draftPath} fill="none" stroke="url(#edge-live)" strokeWidth="2" />
-              )}
+              {draftPath && <path d={draftPath} fill="none" className="mf-link is-on is-flow" />}
             </svg>
 
             {doc.nodes.map((n) => (
@@ -1008,22 +1295,23 @@ export default function Canvas() {
                 key={n.id}
                 node={n}
                 active={selected.includes(n.id)}
+                zoom={view.z}
                 onMouseDown={(e) => onNodeDown(e, n)}
                 onPortDown={onPortDown}
                 onResizeDown={onResizeDown}
-                price={price}
-                busy={busy}
                 onText={(text) => patchNode(n.id, { text })}
                 onPatch={(patch) => patchNode(n.id, patch)}
-                onSend={() => generateNode(n.id)}
-                onPreview={(media) => { setPreviewScale(1); setPreviewMedia(media); }}
                 onUpload={() => openPicker('image/*,video/*', { x: n.x + nodeW(n) / 2, y: n.y + nodeH(n) / 2 }, n.id)}
+                onPreview={(media) => { setPreviewScale(1); setPreviewMedia(media); }}
+                onOpenDirector={() => setDirectorId(n.id)}
+                onDelete={() => removeNode(n.id)}
+                onEditGenerate={() => focusNode(n)}
               />
             ))}
           </div>
           {selectionRect && (
             <div
-              className="pointer-events-none absolute z-10 border border-brand-500 bg-brand-500/10"
+              className="mf-marquee pointer-events-none absolute z-10"
               style={{
                 left: Math.min(selectionRect.x1, selectionRect.x2),
                 top: Math.min(selectionRect.y1, selectionRect.y2),
@@ -1034,69 +1322,188 @@ export default function Canvas() {
           )}
         </div>
 
-        <div className="frost absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-nowrap items-center gap-1 overflow-x-auto rounded-full border border-white p-1.5 shadow-lg [&>*]:shrink-0">
-          <span title="左键选择，拖动空白处框选" className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500/10 text-brand-500"><MousePointer2 size={16} /></span>
+        {showToolbar && (
+          <ImageToolbar
+            style={toolbarStyle}
+            active={tool?.nodeId === focused.id ? tool.kind : null}
+            disabled={busy}
+            onTool={(kind, option) => openTool(focused, kind, option)}
+            onPreview={() => { setPreviewScale(1); setPreviewMedia({ type: 'image', src: focused.mediaUrl }); }}
+            onReplace={() => openPicker('image/*', { x: focused.x + nodeW(focused) / 2, y: focused.y + nodeH(focused) / 2 }, focused.id)}
+            downloadHref={focused.mediaUrl}
+            downloadName={`musecanvas-${focused.label || '图片'}${focused.mediaUrl.split(/[?#]/)[0].match(/\.(png|jpe?g|webp|gif)$/i)?.[0] || '.png'}`}
+          />
+        )}
+
+        {showComposer && (
+          <Composer
+            node={focused}
+            incoming={focusedIncoming}
+            style={composerStyle}
+            busy={busy}
+            onPatch={(patch) => patchNode(focused.id, patch)}
+            onSend={() => generateNode(focused.id)}
+          />
+        )}
+
+        {toolNode && tool.kind === 'light' && (
+          <LightingStudio src={toolNode.mediaUrl} onClose={() => setTool(null)}
+            onSubmit={({ label, prompt }) => createDerived(toolNode, { label, prompt })} />
+        )}
+        {toolNode && tool.kind === 'angle' && (
+          <AngleStudio src={toolNode.mediaUrl} onClose={() => setTool(null)}
+            onSubmit={({ label, prompt }) => createDerived(toolNode, { label, prompt })} />
+        )}
+        {toolNode && tool.kind === 'grid' && (
+          <GridSplitPanel style={panelStyle} src={toolNode.mediaUrl} onClose={() => setTool(null)}
+            onSubmit={(grid) => runGridSplit(toolNode, grid)} />
+        )}
+        {toolNode && tool.kind === 'inpaint' && (
+          <InpaintEditor src={toolNode.mediaUrl} onClose={() => setTool(null)}
+            onSubmit={(payload) => runInpaint(toolNode, payload)} />
+        )}
+        {toolNode && tool.kind === 'panorama' && (
+          <PanoramaViewer src={toolNode.mediaUrl} initialMode={tool.mode} onClose={() => setTool(null)}
+            onCapture={(shots) => runShotsExport(toolNode, shots)} />
+        )}
+
+        <header className="mf-topbar" onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          <div className="mf-pill mf-crumb">
+            <button type="button" className="mf-icon-btn"
+              onClick={() => nav(canvasInfo.isScratch ? '/scratch' : '/projects/' + canvasInfo.projectId)}
+              aria-label={canvasInfo.isScratch ? '返回画布列表' : '返回项目'} title={canvasInfo.isScratch ? '返回画布列表' : '返回项目'}>
+              <ArrowLeft size={16} />
+            </button>
+            <span className="mf-crumb-parent">{canvasInfo.isScratch ? '独立画布' : canvasInfo.projectName}</span>
+            <span className="mf-crumb-sep" aria-hidden="true">/</span>
+            <h1>{canvasInfo.name}</h1>
+            <span role="status" className={clsx('mf-save', saveError ? 'is-error' : saved ? 'is-saved' : 'is-saving')} title={saveError ? '保存失败' : saved ? '已保存' : '保存中'}>
+              <i />{saveError ? '保存失败' : saved ? '已保存' : '保存中'}
+            </span>
+          </div>
+          <div className="mf-pill mf-actions">
+            <button type="button" className="mf-pill-btn" aria-label="素材库" onClick={()=>setWorkbench('library')}><FolderOpen size={15}/><span className="muse-action-label">素材库</span></button>
+            <button type="button" className="mf-pill-btn" aria-label="生成历史与版本" onClick={()=>setWorkbench('history')}><History size={15}/><span className="muse-action-label">历史</span></button>
+            <button type="button" className="mf-pill-btn" aria-label="AI 搭建画布" onClick={()=>setWorkbench('ai')}><Sparkles size={15}/><span className="muse-action-label">AI 搭建</span></button>
+            <button type="button" className="mf-pill-btn" aria-label="分镜表" onClick={()=>setWorkbench('storyboard')}><BookOpen size={15}/><span className="muse-action-label">分镜表</span></button>
+            <button type="button" className="mf-pill-btn" aria-label="自动整理画布" onClick={autoArrange}><LayoutGrid size={15}/><span className="muse-action-label">整理</span></button>
+            <button type="button" className={clsx('mf-pill-btn', activityOpen && 'is-on')} aria-label="画布任务" aria-expanded={activityOpen}
+              aria-controls={activityOpen ? 'canvasTasks' : undefined} onClick={() => setActivityOpen((open) => !open)}>
+              <ListChecks size={15} /><span className="muse-action-label">任务</span>{runningCount > 0 && <span className="mf-badge">{runningCount}</span>}
+            </button>
+            <button type="button" className={clsx('mf-pill-btn', assistantOpen && 'is-on')} aria-label="Muse 对话" aria-expanded={assistantOpen}
+              aria-controls={assistantOpen ? 'canvasAssistant' : undefined} onClick={() => setAssistantOpen((open) => !open)}>
+              <MessageSquare size={15} /><span className="muse-action-label">Muse 对话</span>
+            </button>
+            <button type="button" className="mf-pill-btn" aria-label="设置" onClick={() => nav('/settings')}><Settings size={15}/></button>
+          </div>
+        </header>
+
+        <div className="mf-dock" role="toolbar" aria-label="画布工具" onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          <ToolBtn icon={MousePointer2} onClick={() => setPanTool(false)} active={!panTool} title="选择与框选" />
+          <ToolBtn icon={Hand} onClick={() => setPanTool(true)} active={panTool} title="平移画布（或按住空格拖动）" />
           <Sep />
-          <ToolBtn icon={Type} onClick={() => addNode('text')} title="文本输入节点" />
-          <ToolBtn icon={Upload} onClick={() => openPicker('image/*', centerPoint(), null)} title="上传图片节点" />
-          <ToolBtn icon={ImageIcon} onClick={() => addNode('image', { intent: 'generate', label: '制作图片' })} title="制作图片节点" />
-          <ToolBtn icon={Video} onClick={() => addNode('video', { intent: 'generate', label: '制作视频' })} title="制作视频节点" />
+          <ToolBtn icon={Type} label="文本" onClick={() => addNode('text')} title="添加文本节点" />
+          <ToolBtn icon={ImageIcon} label="图片" onClick={() => addNode('image', { intent: 'generate', label: '图片生成' })} title="添加图片生成节点" />
+          <ToolBtn icon={Video} label="视频" onClick={() => addNode('video', { intent: 'generate', label: '视频生成' })} title="添加视频生成节点" />
+          <ToolBtn icon={Clapperboard} label="导演台" onClick={() => addNode('director', { intent: 'director', label: '3D 导演台' })} title="添加 3D 导演台：布景、摆姿势、取景并导出关键帧" />
+          <ToolBtn icon={Upload} label="导入" onClick={() => openPicker('image/*,video/*', centerPoint(), null)} title="导入图片或视频" disabled={uploading} />
+          <Sep />
+          <ToolBtn icon={Trash2} label="删除" onClick={removeSelected} disabled={!selected.length && !selectedLink} danger title="删除选中（Delete）" />
+          <ToolBtn icon={CircleHelp} onClick={() => setGuideOpen(true)} title="使用说明与快捷键" />
+        </div>
+        <ShortcutsGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
+        {workbench&&<CanvasWorkbench tab={workbench} onTab={setWorkbench} onClose={()=>setWorkbench(null)} canvasId={canvasInfo.id} shots={doc.storyboard||[]} selected={selected.length===1?doc.nodes.find(n=>n.id===selected[0]):null} onInsert={insertLibraryAssets} onRestore={restoreDocument} onCheckpoint={checkpoint} onApplyResult={applyHistoricalResult} onReuseJob={reuseHistoricalPrompt} onApply={applyWorkflow} onSetShots={setStoryboard}/>}
+        {directorId && nodeById[directorId] && (
+          <DirectorStage
+            key={directorId}
+            title={nodeById[directorId].label}
+            canvasId={canvasInfo.id}
+            initial={nodeById[directorId].director}
+            images={[...new Map(doc.nodes.filter((n) => n.type === 'image' && n.mediaUrl).map((n) => [n.mediaUrl, { url: n.mediaUrl, label: n.label || '图片' }])).values()]}
+            onSave={(director, preview) => patchNode(directorId, { director, preview })}
+            onExport={(shots) => runShotsExport(nodeById[directorId], shots, '关键帧')}
+            onExportVideo={async (clip) => {
+              try {
+                const [saved] = await uploadAll([clip.file]);
+                placeAssets(nodeById[directorId], [{ ...saved, type: 'video', label: clip.label, w: clip.width, h: clip.height }], 1);
+                toast('动画视频已放入画布', 'ok');
+              } catch (error) {
+                toast(`动画视频保存失败：${error.message}`, 'error');
+                throw error;
+              }
+            }}
+            onClose={() => setDirectorId(null)}
+          />
+        )}
+
+        <div className="mf-view-tools" role="toolbar" aria-label="视图" onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+          <ToolBtn icon={MapIcon} onClick={() => setMinimapOpen((v) => !v)} active={minimapOpen} title="小地图" />
           <Sep />
           <ToolBtn icon={ZoomOut} onClick={() => zoomBy(1 / 1.15)} title="缩小" />
-          <button
-            onClick={() => setView((v) => ({ ...v, z: 1 }))}
-            title="重置为 100%"
-            className="flex h-9 min-w-[70px] items-center justify-center gap-1 rounded-full border border-[#e6eaf2] bg-white px-2 font-mono text-[12px] text-mist-200 hover:text-[#171a24]"
-          >
-            {Math.round(view.z * 100)}% <ChevronDown size={12} className="text-mist-400" />
+          <button type="button" className="muse-zoom-value" onClick={() => setView((v) => ({ ...v, z: 1 }))} title="重置为 100%">
+            {Math.round(view.z * 100)}%
           </button>
           <ToolBtn icon={ZoomIn} onClick={() => zoomBy(1.15)} title="放大" />
-          <Sep />
           <ToolBtn icon={Maximize} onClick={fitView} title="适应画布" />
-          <ToolBtn icon={Trash2} onClick={removeSelected} disabled={!selected.length && !selectedLink} danger title="删除选中 (Delete)" />
         </div>
 
-        <span className="pointer-events-none absolute right-4 top-5 z-20 hidden font-mono text-[10px] text-mist-400/70 xl:block">
-          右侧圆点拖到另一个节点连线，双击连线删除
-        </span>
+        {activityOpen && (
+          <section className="mua-task-panel mf-task-panel" id="canvasTasks" aria-label="画布任务" onMouseDown={(e) => e.stopPropagation()}>
+            <header><h2>画布任务</h2><button type="button" aria-label="关闭任务面板" onClick={() => setActivityOpen(false)}><X size={17} /></button></header>
+            {doc.nodes.some((node) => node.jobId) ? (
+              <ul>
+                {doc.nodes.filter((node) => node.jobId).slice().reverse().map((node) => (
+                  <li key={node.id}>
+                    <button type="button" onClick={() => focusNode(node)} title="定位到节点">
+                      {node.mediaUrl && node.type === 'image'
+                        ? <img src={node.mediaUrl} alt="" className="mf-task-thumb" />
+                        : <span className="mf-task-thumb">{node.type === 'video' ? <Video size={14} /> : <ImageIcon size={14} />}</span>}
+                      <div>
+                        <strong>{node.label || (node.type === 'video' ? '视频节点' : '图片节点')}</strong>
+                        <span data-stage={taskStage(node)}>{TASK_STAGES[taskStage(node)] || '已提交'}</span>
+                      </div>
+                      <Crosshair size={16} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : <p>暂无生成任务</p>}
+          </section>
+        )}
 
         {menu && (
-          <div
-            className="absolute z-30 w-[176px] rounded-2xl border border-[#e6eaf2] bg-white p-1.5 shadow-[0_18px_40px_-24px_rgba(40,50,90,.45)]"
-            style={{ left: menu.x, top: menu.y }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+          <div className="mf-menu mf-add-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
+            <p>{menu.link ? '新建并连接' : '添加节点'}</p>
             {[
-              ['上传图片节点', Upload, () => {
+              ['文本', Type, () => connectCreatedNode(addNode('text', { intent: 'input', label: '文本' }, menu.point), menu.link)],
+              ['图片生成', ImageIcon, () => connectCreatedNode(addNode('image', { intent: 'generate', label: '图片生成' }, menu.point), menu.link)],
+              ['视频生成', Video, () => connectCreatedNode(addNode('video', { intent: 'generate', label: '视频生成' }, menu.point), menu.link)],
+              ['3D 导演台', Clapperboard, () => connectCreatedNode(addNode('director', { intent: 'director', label: '3D 导演台' }, menu.point), menu.link)],
+              ['上传图片', Upload, () => {
                 if (!menu.link) return openPicker('image/*', menu.point, null);
                 const nodeId = addNode('image', { intent: 'asset', label: '图片素材' }, menu.point);
                 connectCreatedNode(nodeId, menu.link);
                 openPicker('image/*', menu.point, nodeId);
+                return undefined;
               }],
-              ['文本输入节点', Type, () => connectCreatedNode(addNode('text', { intent: 'input', label: '文本' }, menu.point), menu.link)],
-              ['制作图片节点', ImageIcon, () => connectCreatedNode(addNode('image', { intent: 'generate', label: '制作图片' }, menu.point), menu.link)],
-              ['制作视频节点', Video, () => connectCreatedNode(addNode('video', { intent: 'generate', label: '制作视频' }, menu.point), menu.link)],
             ].map(([label, Icon, run]) => (
-              <button
-                key={label}
-                type="button"
-                onClick={run}
-                className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[12.5px] text-[#171a24] hover:bg-[#f3efff]"
-              >
-                <Icon size={14} className="text-brand-500" /> {label}
+              <button key={label} type="button" onClick={run}>
+                <Icon size={15} /> {label}
               </button>
             ))}
           </div>
         )}
 
-        <Minimap
-          nodes={doc.nodes}
-          links={links}
-          view={view}
-          vp={vpSize}
-          onNavigate={(worldX, worldY) => setView((current) => ({ ...current, x: -worldX * current.z, y: -worldY * current.z }))}
-        />
-        <ChatDrawer canvasId={canvasInfo.id} canvasName={canvasInfo.name} onInsert={insertAgentReply} />
+        {minimapOpen && (
+          <Minimap
+            nodes={doc.nodes}
+            links={links}
+            view={view}
+            vp={vpSize}
+            onNavigate={(worldX, worldY) => setView((current) => ({ ...current, x: -worldX * current.z, y: -worldY * current.z }))}
+          />
+        )}
         <input
           ref={fileRef}
           type="file"
@@ -1105,6 +1512,8 @@ export default function Canvas() {
           hidden
           onChange={(e) => uploadMedia(e.target.files, uploadPoint.current, uploadTarget.current)}
         />
+        <ChatDrawer canvasId={canvasInfo.id} canvasName={canvasInfo.name} documentAttachments={!!upstream?.documentAttachments} open={assistantOpen} onClose={() => setAssistantOpen(false)} onInsert={insertAgentReply} />
+      </div>
       </div>
       {previewMedia && createPortal((
         <div
@@ -1114,7 +1523,7 @@ export default function Canvas() {
             event.preventDefault();
             setPreviewScale((scale) => Math.min(4, Math.max(0.35, scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12))));
           }}
-          className="fixed inset-0 z-[100] grid place-items-center overflow-hidden bg-[#10121a]/85 p-5 backdrop-blur-sm"
+          className="fixed inset-0 z-[100] grid place-items-center overflow-hidden bg-[#0b0c0f]/88 p-5 backdrop-blur-sm"
         >
           <button
             type="button"
@@ -1129,7 +1538,7 @@ export default function Canvas() {
             alt="图片预览"
             onClick={(e) => e.stopPropagation()}
             style={{ transform: `scale(${previewScale})` }}
-            className="max-h-[72vh] max-w-[72vw] rounded-xl object-contain shadow-2xl transition-transform duration-100"
+            className="max-h-[80vh] max-w-[80vw] rounded-xl object-contain shadow-2xl transition-transform duration-100"
           />
           <span className="pointer-events-none absolute bottom-5 rounded-full bg-black/35 px-3 py-1.5 text-[11px] text-white/80">滚轮缩放 {Math.round(previewScale * 100)}%</span>
         </div>
@@ -1139,23 +1548,202 @@ export default function Canvas() {
 }
 
 function Sep() {
-  return <span className="mx-1 h-5 w-px bg-[#e6eaf2]" />;
+  return <span className="mf-sep" aria-hidden="true" />;
 }
 
-function ToolBtn({ icon: Icon, onClick, active, disabled, danger, title }) {
+function ToolBtn({ icon: Icon, onClick, active, disabled, danger, title, label }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={clsx(
-        'grid h-9 w-9 place-items-center rounded-xl transition disabled:opacity-35',
-        active ? 'bg-brand-500/10 text-brand-500' : 'text-mist-300 hover:bg-[#eef0f6] hover:text-[#171a24]',
-        danger && 'hover:!text-rose-400'
-      )}
+      aria-label={title}
+      aria-pressed={active}
+      className={clsx('mf-tool', label && 'has-label', active && 'is-on', danger && 'is-danger')}
     >
       <Icon size={16} />
+      {label && <span>{label}</span>}
     </button>
+  );
+}
+
+/** 选中生成节点时贴在节点下方的提示词编辑器。 */
+function Composer({ node, incoming, style, busy, onPatch, onSend }) {
+  const isVideo = node.type === 'video';
+  const sizes = isVideo ? VIDEO_SIZES : IMAGE_SIZES;
+  const size = sizes.includes(node.size) ? node.size : (isVideo ? '16:9' : '1:1');
+  const duration = VIDEO_DURATIONS.includes(Number(node.duration)) ? Number(node.duration) : 5;
+  const running = node.status === 'running';
+  const texts = incoming.filter((n) => n.type === 'text' && n.text?.trim());
+  const refs = node.refImage ? [{ id: 'ref', mediaUrl: node.refImage }] : incoming.filter((n) => n.type === 'image' && n.mediaUrl);
+  return (
+    <div className="mf-composer" style={style} onMouseDown={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+      {(texts.length > 0 || refs.length > 0) && (
+        <div className="mf-composer-refs">
+          {refs.map((r) => <img key={r.id} src={r.mediaUrl} alt="参考图" title={node.refImage ? '局部重绘标注图' : '参考图'} />)}
+          {texts.length > 0 && <span className="mf-ref-chip"><Link2 size={12} /> 已连入 {texts.length} 段文本</span>}
+          {refs.length > 1 && <span className="mf-ref-chip is-warn">只能使用一张参考图</span>}
+        </div>
+      )}
+      <textarea
+        value={node.text || ''}
+        onChange={(e) => onPatch({ text: e.target.value })}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); onSend(); } }}
+        placeholder={texts.length ? '补充提示词（会与连入的文本合并）' : `描述你想生成的${isVideo ? '视频' : '画面'}，Ctrl+Enter 生成`}
+        rows={3}
+      />
+      <div className="mf-composer-bar">
+        <span className="mf-model"><Sparkles size={14} /> Muse {isVideo ? '视频' : '图片'}</span>
+        <label className="mf-select" title="画面比例">
+          <select value={size} onChange={(e) => onPatch({ size: e.target.value })}>
+            {sizes.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </label>
+        {isVideo && (
+          <label className="mf-select" title="时长，最高 10 秒">
+            <select value={duration} onChange={(e) => onPatch({ duration: Number(e.target.value) })}>
+              {VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d} 秒</option>)}
+            </select>
+          </label>
+        )}
+        <span className="mf-grow" />
+        <button type="button" className="mf-send" disabled={busy || running} onClick={onSend}
+          title={running ? '生成中' : node.status === 'failed' ? '重试' : '生成（Ctrl+Enter）'} aria-label="生成">
+          {running || busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CanvasNode({ node, active, zoom, onMouseDown, onPortDown, onResizeDown, onText, onPatch, onUpload, onPreview, onOpenDirector, onDelete, onEditGenerate }) {
+  const [renaming, setRenaming] = useState(false);
+  const running = node.status === 'running';
+  const failed = node.status === 'failed';
+  const isText = node.type === 'text';
+  const canSend = sends(node);
+  const isDirector = node.type === 'director';
+  const Icon = isText ? Type : isDirector ? Clapperboard : node.type === 'image' ? ImageIcon : Video;
+  const title = node.label || (isText ? '文本' : isDirector ? '3D 导演台' : node.type === 'image' ? '图片' : '视频');
+  const box = previewBox(node);
+  const stage = taskStage(node);
+  const rememberMedia = (el) => {
+    const width = el?.videoWidth || el?.naturalWidth;
+    const height = el?.videoHeight || el?.naturalHeight;
+    if (!width || !height) return;
+    if (node.mediaW === width && node.mediaH === height) return;
+    onPatch?.({ mediaW: width, mediaH: height });
+  };
+  const headScale = Math.max(1, Math.min(2.2, 1 / zoom));
+
+  return (
+    <div
+      data-node-id={node.id}
+      onMouseDown={onMouseDown}
+      style={{ left: node.x, top: node.y, width: nodeW(node), height: nodeH(node) }}
+      className={clsx('mf-node absolute', `is-${node.type}`, active && 'is-active', running && 'is-running', failed && 'is-failed')}
+    >
+      <div className="mf-node-head" style={{ transform: `scale(${headScale})`, width: `calc(${100 / headScale}% - 4px)` }}>
+        {isDirector && <button type="button" data-drag-handle aria-label="拖动导演台节点" className="mf-director-drag" title="按住拖动导演台节点，位置自动保存"><GripVertical size={14}/></button>}
+        <Icon size={14} />
+        {renaming ? (
+          <input
+            autoFocus
+            defaultValue={title}
+            onMouseDown={(e) => e.stopPropagation()}
+            onBlur={(e) => { onPatch({ label: e.target.value.trim().slice(0, 40) || title }); setRenaming(false); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') setRenaming(false); }}
+          />
+        ) : (
+          <span className="mf-node-title" title="双击重命名" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(true); }}>{title}</span>
+        )}
+        {isDirector && <span className="mf-node-state">{node.director?.keyframes?.length || 0} 个关键帧</span>}
+        {canSend && !running && <button type="button" className="mf-node-edit" aria-label={'编辑并生成'+title} title="打开提示词、参数与生成按钮" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onEditGenerate();}}><Sparkles size={12}/><span>编辑</span></button>}
+        {!isText && !isDirector && (canSend || node.mediaUrl) && (
+          <span className={clsx('mf-node-state', `is-${stage || 'idle'}`)}>
+            {running ? TASK_STAGES[stage] : failed ? '失败' : node.mediaUrl ? (canSend ? '已生成' : '素材') : '待生成'}
+          </span>
+        )}
+        <button type="button" className="mf-node-delete" aria-label={'删除'+title+'节点'} title="删除此节点" onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDelete(); }}><Trash2 size={12}/><span>删除</span></button>
+      </div>
+
+      {['in', 'out'].map((side) => (
+        <button
+          key={side}
+          type="button"
+          data-port={side}
+          data-node-id={node.id}
+          title={side === 'out' ? '从这里拖到另一个节点' : '把另一个节点拖到这里'}
+          aria-label={side === 'out' ? '输出连接点' : '输入连接点'}
+          onMouseDown={(e) => onPortDown(e, node, side)}
+          className={clsx('mf-port', side === 'in' ? 'is-in' : 'is-out')}
+        />
+      ))}
+
+      <div className="mf-node-card">
+        {isDirector ? (
+          <div className="mf-media mf-director-card" title="拖动卡片移动位置，双击或点击按钮打开导演台" style={{ height: box.height }} onDoubleClick={(e) => { e.stopPropagation(); onOpenDirector(); }}>
+            {node.preview ? <img src={node.preview} alt="导演台关键帧" draggable={false} className="canvas-media" /> : (
+              <div className="mf-media-empty"><Clapperboard size={26} strokeWidth={1.4} /><span>布景 · 摆姿势 · 取景 · 导出参考图</span><span>拖动卡片可移动位置</span></div>
+            )}
+            <button type="button" className="mf-director-open" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onOpenDirector(); }}>
+              <Clapperboard size={14} /> 打开导演台
+            </button>
+          </div>
+        ) : isText ? (
+          <textarea
+            value={node.text || ''}
+            onChange={(e) => onText(e.target.value)}
+            onMouseDown={(e) => e.stopPropagation()}
+            placeholder="写下提示词、剧本或分镜，再连到图片或视频节点"
+            className="mf-node-text"
+          />
+        ) : (
+          <div className="mf-media" style={{ height: box.height }}>
+            {node.mediaUrl ? (
+              node.type === 'video' ? (
+                <video src={node.mediaUrl} controls loop playsInline draggable={false} onMouseDown={(e) => e.stopPropagation()} onLoadedMetadata={(e) => rememberMedia(e.currentTarget)} className="canvas-media" />
+              ) : (
+                <img src={node.mediaUrl} alt={title} draggable={false} onLoad={(e) => rememberMedia(e.currentTarget)}
+                  onDoubleClick={(e) => { e.stopPropagation(); onPreview?.({ type: 'image', src: node.mediaUrl }); }} className="canvas-media" />
+              )
+            ) : running ? (
+              <div className="mf-media-empty is-running" role="status">
+                <Loader2 size={18} className="animate-spin" />
+                <span>{TASK_STAGES[stage]}</span>
+                {node.progress > 0 && <i className="mf-progress"><b style={{ width: `${node.progress}%` }} /></i>}
+              </div>
+            ) : failed ? (
+              <div className="mf-media-empty is-failed"><span>{node.error || '生成失败'}</span><button type="button" className="mf-ghost" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onEditGenerate();}}>编辑并重试</button></div>
+            ) : canSend ? (
+              <div className="mf-media-empty"><Icon size={26} strokeWidth={1.4}/><span>{node.text?'提示词已就绪':'填写提示词后生成'}</span><button type="button" className="mf-ghost" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onEditGenerate();}}><Sparkles size={13}/>编辑并生成</button></div>
+            ) : (
+              <div className="mf-media-empty">
+                <button type="button" className="mf-ghost" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onUpload(); }}>
+                  <Upload size={13} /> 上传{node.type === 'video' ? '视频' : '图片'}
+                </button>
+              </div>
+            )}
+            {running && node.mediaUrl && <div className="mf-media-veil"><Loader2 size={18} className="animate-spin" /></div>}
+          </div>
+        )}
+      </div>
+
+      {isText && (
+        <button
+          type="button"
+          aria-label="调整文本节点大小"
+          title="拖动调整节点大小"
+          onMouseDown={(e) => onResizeDown(e, node)}
+          className="mf-resize"
+        >
+          <svg viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M10.5 3.5v7h-7M7.5 7.5v3h-3" fill="none" stroke="currentColor" strokeWidth="1.2" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1209,7 +1797,7 @@ function Minimap({ nodes, links, view, vp, onNavigate }) {
   };
 
   return (
-    <div className="absolute bottom-5 right-5 z-20 hidden rounded-2xl border border-[#e6eaf2] bg-white/85 p-2.5 shadow-lg backdrop-blur md:block">
+    <div className="muse-minimap absolute bottom-4 right-4 z-20 hidden rounded-xl border border-ink-600 bg-ink-800 p-2 md:block">
       <div className="mb-2 flex items-center justify-between px-0.5">
         <span className="flex items-center gap-1.5 text-[11.5px] text-mist-200">
           <MapIcon size={12} className="text-mist-400" /> 小地图
@@ -1260,218 +1848,6 @@ function Minimap({ nodes, links, view, vp, onNavigate }) {
           style={{ left: mapViewX, top: mapViewY, width: mapViewWidth, height: mapViewHeight, pointerEvents: 'none' }}
         />
       </div>
-    </div>
-  );
-}
-
-function CanvasNode({ node, active, price, busy, onMouseDown, onPortDown, onResizeDown, onText, onPatch, onSend, onUpload, onPreview }) {
-  const running = node.status === 'running';
-  const failed = node.status === 'failed';
-  const isText = node.type === 'text';
-  const canSend = sends(node);
-  const sizes = node.type === 'video' ? VIDEO_SIZES : IMAGE_SIZES;
-  const size = sizes.includes(node.size) ? node.size : (node.type === 'video' ? '16:9' : '1:1');
-  const duration = VIDEO_DURATIONS.includes(Number(node.duration)) ? Number(node.duration) : 5;
-  const cost = node.type === 'video'
-    ? Number(price?.videoBase || 10) + Number(price?.videoPerSecond || 2) * duration
-    : Number(price?.image || 5);
-  const Icon = isText ? Type : node.type === 'image' ? ImageIcon : Video;
-  const title = node.label || (isText ? '文本提示词' : node.type === 'image' ? '图片' : '视频');
-  const role = isText ? '输入' : canSend ? '生成' : '素材';
-  const box = previewBox(node);
-  const wrapsVideoControls = node.type === 'video' && canSend && box.width < VIDEO_CONTROLS_WRAP_WIDTH;
-  const fileName = node.mediaUrl ? decodeURIComponent(node.mediaUrl.split('/').pop().split('?')[0]) : null;
-  const mediaExtension = node.mediaUrl?.split(/[?#]/)[0].match(/\.(png|jpe?g|webp|gif|mp4|webm|mov)$/i)?.[0];
-  const downloadName = `Mua-${isText ? '素材' : node.type === 'video' ? '视频' : '图片'}${mediaExtension || (node.type === 'video' ? '.mp4' : '.png')}`;
-  const rememberMedia = (el) => {
-    const width = el?.videoWidth || el?.naturalWidth;
-    const height = el?.videoHeight || el?.naturalHeight;
-    if (!width || !height) return;
-    if (node.mediaW === width && node.mediaH === height) return;
-    onPatch?.({ mediaW: width, mediaH: height });
-  };
-
-  return (
-    <div
-      data-node-id={node.id}
-      onMouseDown={onMouseDown}
-      style={{ left: node.x, top: node.y, width: nodeW(node), height: isText ? 'auto' : nodeH(node) }}
-      className={clsx('glass-node absolute cursor-grab p-3.5 active:cursor-grabbing', active && 'is-active')}
-    >
-      {['in', 'out'].map((side) => (
-        <button
-          key={side}
-          type="button"
-          data-port={side}
-          data-node-id={node.id}
-          title={side === 'out' ? '从这里拖到另一个节点' : '把另一个节点拖到这里'}
-          onMouseDown={(e) => onPortDown(e, node, side)}
-          className={clsx(
-            'absolute top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 bg-white',
-            side === 'in' ? '-left-[8px]' : '-right-[8px]',
-            active ? 'border-brand-400' : 'border-mist-300/70',
-            'hover:scale-125 hover:border-brand-300'
-          )}
-        />
-      ))}
-
-      <div className="mb-2.5 flex min-w-0 items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-[#171a24]">
-          <Icon size={15} className="text-brand-400" />
-          <span className="truncate">{title}</span>
-        </span>
-        <span className="shrink-0 whitespace-nowrap rounded-md bg-[#eef0f6] px-1.5 py-0.5 text-[10px] text-mist-300">
-          {role}{!isText && canSend ? ` · ${size}` : ''}
-        </span>
-      </div>
-
-      {isText ? (
-        <textarea
-          value={node.text || ''}
-          onChange={(e) => onText(e.target.value)}
-          onMouseDown={(e) => e.stopPropagation()}
-          placeholder="写下提示词"
-          style={{ height: Math.max(96, nodeH(node) - 88) }}
-          className="w-full resize-none overflow-y-auto rounded-xl border border-[#e6eaf2] bg-[#f7f8fc] px-3 py-2.5 text-[12px] leading-relaxed text-[#171a24] outline-none placeholder:text-mist-400 focus:border-brand-400/40"
-        />
-      ) : (
-        <>
-        {canSend && (
-          <textarea
-            value={node.text || ''}
-            onChange={(e) => onText(e.target.value)}
-            onMouseDown={(e) => e.stopPropagation()}
-            placeholder="提示词，留空则使用连入的文本"
-            className="mb-2 h-12 w-full resize-none rounded-xl border border-ink-600 bg-ink-750 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-ink-950 outline-none placeholder:text-mist-400"
-          />
-        )}
-        <div className="relative overflow-hidden rounded-xl bg-ink-700" style={{ width: box.width, height: box.height }}>
-          {node.mediaUrl ? (
-            node.type === 'video' ? (
-              <video src={node.mediaUrl} controls loop playsInline draggable={false} onMouseDown={(e) => e.stopPropagation()} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }} onLoadedMetadata={(e) => rememberMedia(e.currentTarget)} className="canvas-media h-full w-full object-contain" />
-            ) : (
-              <img src={node.mediaUrl} alt="图片素材" draggable={false} onMouseDown={(e) => e.stopPropagation()} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }} onLoad={(e) => rememberMedia(e.currentTarget)} className="canvas-media h-full w-full select-none object-contain" />
-            )
-          ) : (
-            <div className="grid h-full place-items-center bg-[radial-gradient(circle_at_30%_20%,rgba(122,92,255,.16),transparent_62%)]">
-              {running ? (
-                <div className="flex items-center gap-1.5 text-[12px] text-brand-300">
-                  <Loader2 size={14} className="animate-spin" /> {node.progress || 0}%
-                </div>
-              ) : failed ? (
-                <span className="px-3 text-center text-[11.5px] text-rose-400">{node.error || '生成失败'}</span>
-              ) : canSend ? (
-                <span className="px-3 text-center text-[11.5px] text-mist-400">写下提示词，或连入文本节点</span>
-              ) : node.type === 'image' ? (
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); onUpload(); }}
-                  className="rounded-full border border-[#e6eaf2] bg-white px-3 py-1.5 text-[11.5px] text-mist-200 hover:border-brand-400/50 hover:text-brand-500"
-                >
-                  上传图片
-                </button>
-              ) : (
-                <span className="text-[11.5px] text-mist-400">等待素材</span>
-              )}
-            </div>
-          )}
-        </div>
-        {node.mediaUrl && (
-          <div className="mt-2 flex h-8 items-center justify-end gap-1.5" onMouseDown={(e) => e.stopPropagation()}>
-            {node.type !== 'video' && (
-              <button
-                type="button"
-                aria-label="放大图片预览"
-                title="放大图片预览"
-                onClick={(e) => { e.stopPropagation(); onPreview?.({ type: 'image', src: node.mediaUrl }); }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e6eaf2] bg-white text-[#343b50] transition hover:border-brand-300 hover:text-brand-600"
-              >
-                <Expand size={14} />
-              </button>
-            )}
-            <a
-              href={node.mediaUrl}
-              download={downloadName}
-              aria-label={`下载${node.type === 'video' ? '视频' : '图片'}`}
-              title="下载"
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#e6eaf2] bg-white px-2.5 text-[11px] font-medium text-[#343b50] transition hover:border-brand-300 hover:text-brand-600"
-            >
-              <Download size={13} /> 下载
-            </a>
-          </div>
-        )}
-        </>
-      )}
-
-      <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px]">
-        {isText ? (
-          <span className="flex items-center gap-1.5 text-mist-400">
-            <Sparkles size={12} /> 可连到图片或视频
-          </span>
-        ) : (
-          <>
-            <span className="truncate text-mist-200" title={node.text}>{fileName || node.text || '未命名'}</span>
-            <span className={clsx('flex shrink-0 items-center gap-1', failed ? 'text-rose-300' : running ? 'text-mist-300' : node.mediaUrl ? 'text-brand-300' : 'text-mist-400')}>
-              <span className={clsx('h-1.5 w-1.5 rounded-full', failed ? 'bg-rose-400' : running ? 'bg-amber-400' : node.mediaUrl ? 'bg-brand-400' : 'bg-mist-400')} />
-              {failed ? '失败' : running ? '生成中' : node.mediaUrl ? '完成' : '空'}
-            </span>
-          </>
-        )}
-      </div>
-
-      {canSend && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5" onMouseDown={(e) => e.stopPropagation()}>
-          <select
-            value={size}
-            onChange={(e) => onPatch({ size: e.target.value })}
-            className={clsx(
-              'h-8 cursor-pointer rounded-lg border border-[#e6eaf2] bg-white font-mono text-[11px] text-[#171a24] outline-none',
-              node.type === 'video' ? 'w-[72px] shrink-0 px-1' : 'min-w-0 flex-1 px-1.5',
-            )}
-            title="比例"
-          >
-            {sizes.map((x) => <option key={x} value={x}>{x}</option>)}
-          </select>
-          {node.type === 'video' && (
-            <select
-              value={duration}
-              onChange={(e) => onPatch({ duration: Number(e.target.value) })}
-              className="h-8 w-[60px] shrink-0 cursor-pointer rounded-lg border border-[#e6eaf2] bg-white px-1 font-mono text-[11px] text-[#171a24] outline-none"
-              title="时长，最高 10 秒"
-            >
-              {VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
-            </select>
-          )}
-          <button
-            type="button"
-            disabled={busy || running}
-            onClick={onSend}
-            className={clsx(
-              'mint-btn flex h-8 min-w-[96px] flex-1 items-center justify-center gap-1 rounded-lg px-2.5 text-[11.5px] font-semibold disabled:opacity-50',
-              wrapsVideoControls && 'w-full',
-            )}
-          >
-            {running ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
-            发送
-            <span className="rounded-md bg-white/20 px-1.5 py-0.5 font-mono text-[10px]">{cost} 积分</span>
-          </button>
-        </div>
-      )}
-      {isText && (
-        <button
-          type="button"
-          aria-label="调整文本节点大小"
-          title="拖动调整节点大小"
-          onMouseDown={(e) => onResizeDown(e, node)}
-          className="absolute bottom-1.5 right-1.5 z-20 h-4 w-4 cursor-nwse-resize rounded-sm text-mist-400/60 transition hover:text-brand-500"
-        >
-          <svg viewBox="0 0 12 12" className="h-full w-full" aria-hidden="true">
-            <path d="M10.5 3.5v7h-7M7.5 7.5v3h-3" fill="none" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
-        </button>
-      )}
     </div>
   );
 }

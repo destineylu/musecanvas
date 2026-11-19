@@ -116,7 +116,7 @@ export default function Projects() {
       <header className="mb-7 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-brand-500">
-            <Sparkles size={15} /> Mua 工作区
+            <Sparkles size={15} /> musecanvas 工作区
           </div>
           <h1 className="text-[26px] font-semibold tracking-tight text-[#171a24]">项目管理</h1>
           <p className="mt-1.5 text-[13px] text-mist-400">按项目整理创作，每个项目可以拥有多张独立画布。</p>

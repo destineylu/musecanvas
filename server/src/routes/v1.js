@@ -1,59 +1,54 @@
 import { Router } from 'express';
-import { CFG } from '../config.js';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { CFG, usesMuse2api } from '../config.js';
+import { bridgeRequest } from '../muse.js';
+import { legacyRequest } from '../muse2api.js';
 import { apiKeyAuth } from './apikeys.js';
 
-/**
- * 对外暴露 OpenAI 兼容接口 /v1/*，用平台的 sk- 密钥鉴权，
- * 内部转发到上游 muse2api（它才是真正驱动 muse.ai 的那层）。
- */
 const r = Router();
-
 r.use(apiKeyAuth);
 
-r.all('/*', async (req, res) => {
-  const target = CFG.museBase + req.originalUrl; // originalUrl 已含 /v1/... 与 query
-  const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15 * 60 * 1000);
-
+async function proxy(req, res) {
+  const body = req.method === 'POST' ? { ...req.body } : undefined;
+  if (!usesMuse2api && body?.model === 'muse-spark') body.model = CFG.bridgeModels.chat;
+  const client = new AbortController();
+  const disconnected = () => { if (!res.writableFinished) client.abort(); };
+  res.on('close', disconnected);
   try {
-    const up = await fetch(target, {
-      method: req.method,
-      headers: {
-        Authorization: `Bearer ${CFG.museKey}`,
-        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: hasBody ? JSON.stringify(req.body ?? {}) : undefined,
-      signal: controller.signal,
+    const signal = AbortSignal.any([client.signal, AbortSignal.timeout(usesMuse2api ? 900_000 : CFG.bridgeTimeoutMs)]);
+    const query = new URL(req.originalUrl, 'http://localhost').search;
+    const options = { method: req.method, body, signal };
+    const up = usesMuse2api
+      ? await legacyRequest('/v1' + req.path + query, { ...options, headers: req.headers.range ? { Range: req.headers.range } : {} })
+      : await bridgeRequest(req.path + query, options);
+    const type = up.headers.get('content-type') || 'application/json';
+    res.status(up.status).set('Content-Type', type);
+    for (const key of ['accept-ranges', 'content-range']) {
+      if (up.headers.has(key)) res.set(key, up.headers.get(key));
+    }
+    if (type.includes('text/event-stream')) {
+      res.set('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+    }
+    if (up.body) await pipeline(Readable.fromWeb(up.body), res);
+    else res.end();
+  } catch (error) {
+    if (client.signal.aborted) return;
+    if (res.headersSent) res.destroy();
+    else res.status(error.name === 'TimeoutError' ? 504 : 502).json({
+      error: { message: '上游请求未完成', type: 'upstream_error' },
     });
-
-    const ct = up.headers.get('content-type') || 'application/json';
-    res.status(up.status).set('Content-Type', ct);
-
-    // SSE 流式直接透传
-    if (ct.includes('text/event-stream') && up.body) {
-      const reader = up.body.getReader();
-      res.flushHeaders?.();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(Buffer.from(value));
-      }
-      res.end();
-      return;
-    }
-
-    const buf = Buffer.from(await up.arrayBuffer());
-    res.send(buf);
-  } catch (e) {
-    if (!res.headersSent) {
-      res.status(502).json({
-        error: { message: `上游不可用：${e.message}`, type: 'upstream_error' },
-      });
-    }
   } finally {
-    clearTimeout(timer);
+    res.off('close', disconnected);
   }
-});
+}
+
+r.get('/models', proxy);
+r.post('/chat/completions', proxy);
+const legacyOnly = (req, res, next) => usesMuse2api ? proxy(req, res) : next();
+r.post(['/images/tasks', '/images/generations', '/images/edits', '/videos', '/videos/generations', '/responses'], legacyOnly);
+r.get(['/images/tasks/:id', '/videos/:id', '/videos/generations/:id', '/media/:name'], legacyOnly);
+r.use((_req, res) => res.status(404).json({ error: { message: '当前接入方式不支持这个接口', type: 'invalid_request_error' } }));
 
 export default r;

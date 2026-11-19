@@ -1,12 +1,19 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
-import { CFG, MEDIA_DIR, ROOT } from './config.js';
+import { CFG, MEDIA_DIR, ROOT, upstreamMode, usesMuse2api } from './config.js';
 import { db, getSettings } from './db.js';
 import { requireAuth, createUser, findUserByEmail } from './auth.js';
 import { startWorker } from './worker.js';
 import authRoutes from './routes/auth.js';
+import { status as bridgeStatus } from './muse.js';
+import { health as legacyHealth } from './muse2api.js';
 import accountRoutes from './routes/accounts.js';
+import bridgeRoutes from './routes/bridges.js';
+import muse2apiRoutes from './routes/muse2api.js';
+import upstreamRoutes from './routes/upstream.js';
+import { legacyConfig } from './legacy-config.js';
+import { startBridgePool, proxyMedia } from './bridge/gateway.js';
 import genRoutes from './routes/generate.js';
 import adminRoutes from './routes/admin.js';
 import billingRoutes from './routes/billing.js';
@@ -16,21 +23,23 @@ import v1Routes from './routes/v1.js';
 import queueRoutes from './routes/queue.js';
 import teamRoutes from './routes/team.js';
 import chatRoutes from './routes/chat.js';
+import directorRoutes from './routes/director.js';
 import projectRoutes from './routes/projects.js';
+import workbenchRoutes from './routes/workbench.js';
 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '80mb' }));
 
-// 简易 CORS：开发期前端跑在 5173；绑定接口允许任意来源（用一次性 code 认证）
+// 简易 CORS：开发期前端跑在 5173
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const isBind = req.path === '/api/accounts/bind' || req.path.startsWith('/api/accounts/bind/');
-  if (origin && (isBind || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
-    res.setHeader('Access-Control-Allow-Origin', isBind ? '*' : origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  const binding = req.path === '/api/accounts/bind' || req.path.startsWith('/api/accounts/bind/');
+  if (origin && (binding || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', binding ? '*' : origin);
+    if (!binding) res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -38,24 +47,40 @@ app.use((req, res, next) => {
 
 /* ------------------------------ 静态资源 ------------------------------ */
 app.use('/media', express.static(MEDIA_DIR, { maxAge: '7d', fallthrough: true }));
+app.get('/bridge-media/*', proxyMedia);
 app.use('/uploads', express.static(path.join(CFG.dataDir, 'uploads'), { maxAge: '1d', fallthrough: true }));
-app.get('/download/museapi-video-extension.zip', (_req, res) => res.redirect(301, '/download/mua-account-binding.zip'));
-// 浏览器扩展打包下载（scripts/build-extension.ps1 生成）
-app.use('/download', express.static(path.join(ROOT, 'public'), { fallthrough: true }));
 
 /* ------------------------------- 接口 ------------------------------- */
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
+    service: 'mua',
     time: Date.now(),
     version: CFG.appVersion,
-    upstream: CFG.museBase,
+    upstreamMode,
+    upstream: usesMuse2api ? legacyConfig().baseUrl : 'embedded',
     site: getSettings().siteName,
   });
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/bridges', bridgeRoutes);
+app.use('/api/muse2api', muse2apiRoutes);
+app.use('/api/upstream', upstreamRoutes);
+app.get(['/api/bridge/status', '/api/upstream/status'], requireAuth, async (_req, res) => {
+  try {
+    if (usesMuse2api) {
+      const health = await legacyHealth();
+      return res.json({ mode: upstreamMode, online: health?.ok ?? health?.status === 'ok' });
+    }
+    res.json({ mode: upstreamMode, online: true, ...(await bridgeStatus()) });
+  } catch (error) {
+    res.status(502).json({ mode: upstreamMode, error: error.message });
+  }
+});
 app.use('/api/accounts', accountRoutes);
+  app.get('/download/museapi-video-extension.zip', (_req, res) => res.redirect(301, '/download/mua-account-binding.zip'));
+  app.get('/download/mua-account-binding.zip', (_req, res) => res.sendFile(path.join(ROOT, 'public', 'mua-account-binding.zip')));
 app.use('/api/admin', adminRoutes);
 app.use('/api', apiKeyRoutes);   // /api/keys
 app.use('/api', billingRoutes);
@@ -63,7 +88,9 @@ app.use('/api', forumRoutes);
 app.use('/api', queueRoutes);
 app.use('/api', teamRoutes);
 app.use('/api', chatRoutes);
+app.use('/api', directorRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api', workbenchRoutes);
 app.use('/api', genRoutes);
 
 // OpenAI 兼容对外接口（用 sk- 密钥鉴权，转发到上游）
@@ -78,7 +105,7 @@ const under = (p, base) => p === base || p.startsWith(base + '/');
 if (fs.existsSync(webDist)) {
   app.use(express.static(webDist, { index: false }));
   app.get('*', (req, res, next) => {
-    if (under(req.path, '/api') || under(req.path, '/media') || under(req.path, '/uploads') || under(req.path, '/v1') || under(req.path, '/download')) {
+    if (under(req.path, '/api') || under(req.path, '/media') || under(req.path, '/uploads') || under(req.path, '/v1') || under(req.path, '/download') || under(req.path, '/bridge-media')) {
       return next();
     }
     res.sendFile(path.join(webDist, 'index.html'));
@@ -113,9 +140,10 @@ function bootstrap() {
 }
 
 bootstrap();
+startBridgePool();
 startWorker();
 
 app.listen(CFG.port, CFG.host, () => {
   console.log(`[server] 平台后端已启动 http://${CFG.host}:${CFG.port}`);
-  console.log(`[server] 上游 muse2api ${CFG.museBase}`);
+  console.log(`[server] 上游 ${upstreamMode} ${usesMuse2api ? CFG.museBase : 'embedded'}`);
 });

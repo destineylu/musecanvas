@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db, now, uid } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { normalizeDocument, snapshot } from '../workbench.js';
 
 const r = Router();
 
@@ -11,14 +12,15 @@ function cleanName(value, fallback = '') {
 
 function cleanDocument(value) {
   if (!value || typeof value !== 'object' || !Array.isArray(value.nodes) || !Array.isArray(value.links)) {
-    return { nodes: [], links: [], view: { x: 0, y: 0, z: 1 } };
+    throw new Error('画布文档无效');
   }
   const document = {
     nodes: value.nodes.slice(0, 2000),
     links: value.links.slice(0, 5000),
     view: value.view && typeof value.view === 'object' ? value.view : { x: 0, y: 0, z: 1 },
+    storyboard: value.storyboard || [],
   };
-  const serialized = JSON.stringify(document);
+  const serialized = normalizeDocument(document);
   if (serialized.length > 12 * 1024 * 1024) throw new Error('画布内容过大，无法保存');
   return { document, serialized };
 }
@@ -232,6 +234,11 @@ r.patch('/canvases/:canvasId', requireAuth, (req, res) => {
   if (req.body?.document !== undefined) {
     try { documentJson = cleanDocument(req.body.document).serialized; }
     catch (error) { return res.status(400).json({ error: error.message }); }
+  }
+  if (documentJson !== canvas.document_json) {
+    const before=JSON.parse(canvas.document_json),after=JSON.parse(documentJson);
+    const significant=before.nodes.some(n=>!after.nodes.some(a=>a.id===n.id)||after.nodes.some(a=>a.id===n.id&&a.mediaUrl!==n.mediaUrl));
+    snapshot(canvas.id,req.user.id,canvas.document_json,significant?'节点或生成结果变更前':'自动保存前',significant);
   }
   db.prepare('UPDATE canvases SET name = ?, document_json = ?, updated_at = ? WHERE id = ? AND user_id = ?')
     .run(name, documentJson, ts, canvas.id, req.user.id);

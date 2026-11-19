@@ -2,7 +2,7 @@ export const THEME_KEY = 'xm_theme';
 
 export function readTheme() {
   const saved = localStorage.getItem(THEME_KEY);
-  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
+  return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'dark';
 }
 
 export function resolveTheme(mode = readTheme()) {
@@ -18,6 +18,6 @@ export function applyTheme(mode = readTheme()) {
   document.documentElement.dataset.resolved = resolved;
   document.documentElement.style.colorScheme = resolved;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', resolved === 'dark' ? '#0D1118' : '#F3F4F8');
+  if (meta) meta.setAttribute('content', resolved === 'dark' ? '#141c1d' : '#ecf1ee');
   return pref;
 }

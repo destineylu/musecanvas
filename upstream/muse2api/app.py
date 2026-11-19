@@ -384,7 +384,7 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
 
 def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                      timeout: int, account_id: str | None,
-                     reference_files: list[str] | None = None):
+                     reference_files: list[str] | None = None, final_only: bool = False):
     """在独立线程中执行 chat_stream 并持有 GEN_LOCK，通过 Queue 往外吐。
     无论下游客户端何时断连、异常或超时，stop_event + finally 块保证 100% 立即释放 GEN_LOCK，绝不死锁。
     若首字前遇到单账号 VM 卡死或会话异常，自动切换下一个健康账号重试一次。"""
@@ -435,15 +435,26 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                         if stop_event.is_set():
                             return
                         engine.start()
+                        buffered = []
                         for chunk in engine.chat_stream(
                             cur_cookies, prompt, cur_exp, timeout,
                             account_id=cur_id, stop_event=stop_event,
-                            reference_files=reference_files
+                            reference_files=reference_files,
+                            wait_for_final=final_only,
                         ):
                             yielded = True
-                            q.put(("data", chunk))
+                            if final_only:
+                                buffered.append(chunk)
+                            else:
+                                q.put(("data", chunk))
                             if stop_event.is_set():
                                 return
+                        if final_only:
+                            # The web UI can replace code-block text while streaming.
+                            # Concatenated DOM deltas then contain multiple partial JSON
+                            # objects. Read the final snapshot on the same engine thread.
+                            _, final_text, _ = engine._poll_chat()
+                            q.put(("data", final_text or "".join(buffered)))
                     if cur_id:
                         store.mark(cur_id, True, "")
                         _sync_cookies(cur_id)
@@ -1722,7 +1733,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
 
     def run() -> str:
         return "".join(safe_chat_stream(cookies, prompt, expires, timeout,
-                                        account_id=acc_id, reference_files=reference_files))
+                                        account_id=acc_id, reference_files=reference_files, final_only=True))
 
     try:
         text = await asyncio.to_thread(run)

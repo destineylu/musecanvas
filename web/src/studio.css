@@ -1,0 +1,219 @@
+.muse-shell {
+  background: var(--bg);
+  color: var(--ink);
+}
+.muse-navigation {
+  background: var(--surface-soft);
+}
+.muse-brand-button { min-width: 0; }
+.muse-logo {
+  aspect-ratio: 1;
+  flex-shrink: 0;
+  border-radius: 24%;
+  object-fit: cover;
+  object-position: center 37%;
+}
+.muse-wordmark {
+  font-family: var(--font-sans);
+  font-weight: 770;
+  letter-spacing: -.06em;
+  line-height: 1;
+  color: var(--ink);
+}
+.muse-nav-button { color: var(--muted); }
+.muse-nav-button:hover { background: var(--muted-bg); color: var(--ink); }
+.muse-nav-marker { background: var(--color-brand-400); }
+
+.muse-login {
+  position: relative;
+  min-height: 100dvh;
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--color-brand-400) 19%, transparent) 1px, transparent 1.2px);
+  background-size: 24px 24px;
+  overflow-y: auto;
+}
+.muse-login-card {
+  padding: clamp(24px, 4vw, 34px);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 0 26px 80px #132f2924;
+}
+
+.mua-studio {
+  --studio-accent: #177b64;
+  --studio-stage: #92501e;
+  --studio-board: #ecf1ee;
+  --studio-dot: #a2b5ad;
+  --studio-shadow: 0 10px 28px #1e3e3020;
+  background: var(--surface);
+}
+html[data-resolved="dark"] .mua-studio {
+  --studio-accent: #79e3c2;
+  --studio-stage: #f4b775;
+  --studio-board: #141c1d;
+  --studio-dot: #374c47;
+  --studio-shadow: 0 12px 28px #04080747;
+}
+.mua-studio-header {
+  z-index: 31;
+  min-height: 56px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.mua-studio-header h1 { font-size: 14px; font-weight: 680; }
+.muse-parent-name, .muse-breadcrumb-divider, .muse-save { color: var(--faint); font-size: 12px; }
+.muse-toolbar-button, .mua-task-toggle {
+  display: inline-flex;
+  height: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0 10px;
+  color: var(--ink);
+  white-space: nowrap;
+  font-size: 12px;
+}
+.muse-toolbar-button { width: 34px; padding: 0; color: var(--muted); }
+.muse-toolbar-button:hover, .mua-task-toggle:hover, .mua-task-toggle[aria-expanded="true"] {
+  border-color: var(--studio-accent);
+  color: var(--studio-accent);
+}
+.mua-task-toggle .muse-task-count {
+  border-radius: 999px;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--studio-accent) 15%, var(--surface));
+  color: var(--studio-accent);
+}
+
+.mua-viewport { container-type: inline-size; }
+.mua-viewport .dot-grid {
+  background-color: var(--studio-board);
+  background-image: radial-gradient(var(--studio-dot) 0.85px, transparent 1.05px);
+}
+.mua-viewport .glass-node {
+  border-radius: 13px;
+  backdrop-filter: none;
+  box-shadow: var(--studio-shadow);
+}
+.mua-viewport .glass-node.is-active {
+  border-color: var(--studio-accent);
+  outline: 2px solid color-mix(in srgb, var(--studio-accent) 24%, transparent);
+}
+.mua-viewport .glass-node .bg-ink-700 > div { background: var(--field); }
+.mua-studio-tools {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: var(--studio-shadow);
+}
+.muse-create-tools { bottom: 15px; left: 50%; transform: translateX(-50%); }
+.muse-view-tools { bottom: 15px; left: 14px; }
+.muse-zoom-value {
+  min-width: 49px;
+  height: 32px;
+  color: var(--muted);
+  font: 11px var(--font-mono);
+  border-radius: 8px;
+}
+.muse-zoom-value:hover { background: var(--muted-bg); color: var(--ink); }
+.muse-minimap { box-shadow: var(--studio-shadow); }
+.mua-task-panel {
+  position: absolute;
+  z-index: 25;
+  top: 13px;
+  right: 13px;
+  width: min(300px, calc(100% - 26px));
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: var(--studio-shadow);
+  color: var(--ink);
+}
+.mua-task-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.mua-task-panel h2 { font-size: 13px; font-weight: 650; }
+.mua-task-panel header button { padding: 4px; border-radius: 6px; }
+.mua-task-panel header button:hover { background: var(--muted-bg); }
+.mua-task-panel ul { max-height: min(45vh, 380px); overflow: auto; padding: 5px; }
+.mua-task-panel li button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 9px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 12px;
+}
+.mua-task-panel li button:hover, .mua-task-panel li button:focus-visible { background: var(--muted-bg); }
+.mua-task-panel li span { display: block; color: var(--studio-stage); font-size: 11px; margin-top: 3px; }
+.mua-task-panel li span[data-stage="done"] { color: var(--studio-accent); }
+.mua-task-panel li span[data-stage="failed"] { color: #dc5267; }
+.mua-task-panel p { padding: 15px; font-size: 12px; color: var(--muted); }
+.mua-node-stage {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--studio-stage);
+  font-size: 12px;
+}
+
+.muse-assistant {
+  z-index: 30;
+  display: flex;
+  min-height: 0;
+  width: min(360px, 43%);
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  overflow: hidden;
+}
+.muse-assistant.is-expanded { width: min(490px, 49%); }
+.muse-assistant-header { border-bottom: 1px solid var(--line); }
+.muse-chat-composer { border-color: var(--line); background: var(--field); }
+.muse-chat-composer:focus-within { border-color: var(--studio-accent); }
+.muse-send { background: #197862; color: #fff; }
+
+@container (max-width: 650px) {
+  .muse-view-tools { bottom: 65px; }
+  .mua-viewport .muse-minimap { display: none; }
+}
+@media (max-width: 760px) {
+  .muse-workbench { position: relative; }
+  .muse-assistant, .muse-assistant.is-expanded {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(100%, 370px);
+    box-shadow: var(--studio-shadow);
+  }
+  .muse-parent-name, .muse-breadcrumb-divider { display: none; }
+}
+@media (max-width: 480px) {
+  .mua-studio-header { padding: 6px 8px; gap: 5px; }
+  .muse-action-label { display: none; }
+  .mua-studio-tools { gap: 0; padding: 3px; }
+  .mua-studio-tools button { max-width: 32px; }
+  .muse-create-tools .muse-tool-separator { margin-inline: 2px; }
+}
+

@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { CFG } from './config.js';
-import { db, uid, now, addCredits, getSetting } from './db.js';
+import { db, uid, now, addCredits, getSetting, setSetting } from './db.js';
 
 export const hashPassword = (pw) => bcrypt.hashSync(pw, 10);
 export const verifyPassword = (pw, hash) => bcrypt.compareSync(pw, hash);
@@ -53,7 +53,36 @@ export function findUserByEmail(email) {
 }
 
 export function findUserById(id) {
+  if (!id) return null;
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+}
+
+export function isLocalRequest(req) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return false;
+  try {
+    const host = new URL('http://' + req.get('host'));
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(host.hostname)) return false;
+    const origin = req.get('origin');
+    if (origin && origin !== host.origin && !/^http:\/\/(localhost|127\.0\.0\.1):5173$/.test(origin)) return false;
+    return req.get('sec-fetch-site') !== 'cross-site';
+  } catch { return false; }
+}
+
+export function localSession(req) {
+  let user = findUserById(getSetting('localOwnerId'));
+  if (!user || user.status !== 'active') {
+    try {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      user = findUserById(jwt.verify(token, CFG.jwtSecret).sub);
+    } catch { user = null; }
+    if (!user || user.status !== 'active') user = db.prepare(`SELECT u.* FROM users u WHERE status='active'
+      ORDER BY (SELECT COUNT(*) FROM projects p WHERE p.user_id=u.id) DESC,
+      CASE role WHEN 'user' THEN 0 ELSE 1 END, created_at DESC LIMIT 1`).get();
+    if (!user) throw new Error('本机工作区尚未初始化');
+    setSetting('localOwnerId', user.id);
+  }
+  const owner = { ...user, role: 'admin' };
+  return { user: publicUser(owner), token: jwt.sign({ sub: user.id, local: true }, CFG.jwtSecret, { expiresIn: `${CFG.jwtDays}d` }) };
 }
 
 export function requireAuth(req, res, next) {
@@ -62,10 +91,11 @@ export function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: '未登录' });
   try {
     const payload = jwt.verify(token, CFG.jwtSecret);
+    if (payload.local && !isLocalRequest(req)) return res.status(403).json({ error: '本机会话仅允许在本机使用' });
     const user = findUserById(payload.sub);
     if (!user) return res.status(401).json({ error: '账号不存在' });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被封禁' });
-    req.user = user;
+    req.user = payload.local ? { ...user, role: 'admin' } : user;
     next();
   } catch {
     return res.status(401).json({ error: '登录已过期，请重新登录' });

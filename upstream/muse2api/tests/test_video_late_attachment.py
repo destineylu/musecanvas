@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def load_waiter(path):
     tree = ast.parse(Path(path).read_text(encoding="utf-8"))
     engine = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MuseEngine")
-    names = {"_wait_attachment", "_clean_model_text", "_media_refusal_text", "_media_status_pending"}
+    names = {"_wait_attachment", "_clean_model_text", "_media_refusal_text",
+             "_media_status_pending", "_media_refusal_like", "_media_ack_text"}
     methods = [n for n in engine.body if isinstance(n, ast.FunctionDef) and n.name in names]
     module = ast.Module(body=[
         ast.ClassDef(name="MuseGenerationError", bases=[ast.Name(id="RuntimeError", ctx=ast.Load())],
@@ -87,6 +88,14 @@ def cases(source):
         ("failed_after_claim", "视频已生成，但随后处理失败，无法提供视频。"),
     ):
         result[label] = scenario(source, text)
+    # 冷启动 / 排队时 agent 只回一句确认，工具卡与附件晚十几秒才到：
+    # 确认语不是拒绝，必须继续等附件；等不到就交给超时换号重试，而不是当场判失败。
+    ack = "收到，9:16 竖屏花园小猫，我来从零画一张。"
+    result["ack_then_attachment"] = scenario(source, ack, ready_at=30)
+    result["ack_no_attachment"] = scenario(source, ack, ready_at=None, timeout=45)
+    result["ack_en_then_attachment"] = scenario(
+        source, "Garden kitten in 9:16 vertical — generating it fresh from your description now.",
+        ready_at=30)
     return result
 
 
@@ -100,8 +109,10 @@ def main():
         if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "en_claim_", "en_ready_", "verified_report_")):
             assert item["outcome"] == "video", (name, item)
             assert item["elapsed"] >= int(name.rsplit("_", 1)[1]), (name, item)
-        elif name in ("claim_no_attachment", "claim_only_cover"):
+        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment"):
             assert item["outcome"] == "timeout" and 45 <= item["elapsed"] < 46, (name, item)
+        elif name in ("ack_then_attachment", "ack_en_then_attachment"):
+            assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)
         elif name == "stop_lifecycle":
             assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)
         else:

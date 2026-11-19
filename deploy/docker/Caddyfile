@@ -1,0 +1,27 @@
+# Caddy 反代（自动 HTTPS，适合 NAS 上用域名访问）
+# 用法：caddy run --config Caddyfile
+# 前提：域名已解析到 NAS，80/443 可通；也可改成 mua.lan { tls internal }
+
+mua.example.com {
+	encode gzip
+
+	# SSE（对话流式）必须不缓冲，耗时任务（生视频 10 分钟）必须放宽超时
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+			dial_timeout 10s
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	request_body {
+		max_size 200MB
+	}
+}

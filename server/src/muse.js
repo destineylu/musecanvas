@@ -1,151 +1,138 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { CFG, MEDIA_DIR } from './config.js';
+import { gatewayRequest, mediaFetchUrl, bridgeState } from './bridge/gateway.js';
 
-class MuseError extends Error {
-  constructor(message, status, body) {
+export class MuseError extends Error {
+  constructor(message, status = 502) {
     super(message);
-    this.name = 'MuseError';
     this.status = status;
-    this.body = body;
   }
 }
 
-async function call(pathname, { method = 'GET', body, raw = false, timeout = 120_000 } = {}) {
-  const url = `${CFG.museBase}${pathname}`;
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeout);
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Bearer ${CFG.museKey}`,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: ac.signal,
-    });
-    if (raw) return res;
-    const text = await res.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-    if (!res.ok) {
-      const msg = (data && (data.message || data.detail || data.error)) || `上游 HTTP ${res.status}`;
-      throw new MuseError(typeof msg === 'string' ? msg : JSON.stringify(msg), res.status, data);
+export const bridgeRequest = gatewayRequest;
+
+export async function status() {
+  const { models, bridges, pool } = bridgeState();
+  const usable = bridges.some(b => b.enabled && b.tokenSet && pool.bridges[b.id]?.healthy !== false);
+  return {
+    online: usable,
+    models: Object.entries(CFG.bridgeModels).map(([type, id]) => ({
+      type, id, available: usable && models.some(m => m.id === id && m.enabled),
+    })),
+  };
+}
+
+export async function complete(model, messages, onHeaders) {
+  const signal = AbortSignal.timeout(CFG.bridgeTimeoutMs);
+  const response = await bridgeRequest('/chat/completions', {
+    method: 'POST', body: { model, messages, stream: true }, signal,
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new MuseError('API Bridge 请求失败（HTTP ' + response.status + '）', response.status);
+  }
+  onHeaders?.();
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) throw new MuseError('API Bridge 返回空内容');
+    return content;
+  }
+
+  let text = '';
+  let buffer = '';
+  let done = false;
+  const decoder = new TextDecoder();
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let newline;
+    while ((newline = buffer.indexOf('\n')) !== -1) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') { done = true; break; }
+      if (!data) continue;
+      const event = JSON.parse(data);
+      if (event.error) throw new MuseError('API Bridge：' + String(event.error.message || '生成失败').slice(0, 400));
+      text += event.choices?.[0]?.delta?.content || '';
     }
-    return data;
-  } catch (err) {
-    if (err.name === 'AbortError') throw new MuseError('上游请求超时', 504);
-    if (err instanceof TypeError && /fetch failed|failed to fetch/i.test(err.message)) {
-      throw new MuseError(`无法连接 Muse2API（${CFG.museBase}），请确认本地上游服务正在运行`, 503, {
-        code: 'UPSTREAM_UNAVAILABLE',
-      });
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
+    if (done) break;
+    if (text.length + buffer.length > 40 * 1024 * 1024) throw new MuseError('API Bridge 响应过大');
   }
+  if (!done || !text.trim()) throw new MuseError('API Bridge 流式响应未完成或内容为空');
+  return text;
 }
 
-/* --------------------------- 健康 / 概览 --------------------------- */
-export const health = () => call('/healthz', { timeout: 8000 });
-export const status = () => call('/admin/status', { timeout: 20_000 });
+const imageTypes = new Set(['webp', 'png', 'jpg', 'jpeg', 'gif', 'avif']);
+const videoTypes = new Set(['mp4', 'webm', 'mov']);
 
-/* ----------------------------- 账号池 ----------------------------- */
-export async function listAccounts() {
-  const data = await call('/admin/accounts');
-  return { accounts: data?.accounts || [], stats: data?.stats || {} };
+function mediaTarget(value, kind) {
+  const url = new URL(value);
+  const ext = path.posix.extname(url.pathname).slice(1).toLowerCase();
+  const extensions = kind === 'video' ? videoTypes : imageTypes;
+  if (url.username || url.password || !extensions.has(ext)) return null;
+  const target = mediaFetchUrl(url.href);
+  if (!target) return null;
+  return { url, ext, fetchUrl: target };
 }
 
-export const scheduler = () => call('/admin/scheduler');
-export const updateScheduler = (maxConcurrency) => call('/admin/scheduler', {
-  method: 'PATCH', body: { max_concurrency: maxConcurrency },
-});
-export const updateAccount = (upstreamId, body) => call(`/admin/accounts/${encodeURIComponent(upstreamId)}`, {
-  method: 'PATCH', body,
-});
-
-export async function addAccount({ label, cookie, expires, proxy }) {
-  const body = { label };
-  if (cookie) body.cookie_header = cookie;
-  if (expires) body.expires = expires;
-  if (proxy) body.proxy = proxy;
-  return call('/admin/accounts', { method: 'POST', body });
-}
-
-export async function deleteAccount(upstreamId) {
-  return call(`/admin/accounts/${encodeURIComponent(upstreamId)}`, { method: 'DELETE' });
-}
-
-export async function testAccount(upstreamId) {
-  return call(`/admin/accounts/${encodeURIComponent(upstreamId)}/test`, { method: 'POST', timeout: 180_000 });
-}
-
-export async function reloginAccount(upstreamId) {
-  return call(`/admin/accounts/${encodeURIComponent(upstreamId)}/relogin`, { method: 'POST', timeout: 180_000 });
-}
-
-export async function keepaliveAccount(upstreamId) {
-  return call(`/admin/accounts/${encodeURIComponent(upstreamId)}/keepalive`, { method: 'POST', timeout: 180_000 });
-}
-
-/** 查询额度：不传 id 查全池（用最久未用的账号），传 id 查指定账号 */
-export async function queryQuota(upstreamId) {
-  if (upstreamId) {
-    return call(`/admin/accounts/${encodeURIComponent(upstreamId)}/quota`, { method: 'POST', timeout: 150_000 });
+export async function generateMedia(job, references, onHeaders) {
+  const instructions = job.type === 'video'
+    ? '生成一段视频。画幅 ' + job.params.size + '，时长 ' + job.params.duration + ' 秒，返回可下载的 MP4 地址。'
+    : '生成一张图片。画幅 ' + job.params.size + '，返回可下载的图片地址。';
+  const text = [job.prompt, job.params.extra, instructions].filter(Boolean).join('\n');
+  const content = references.length ? [
+    { type: 'text', text },
+    { type: 'image_url', image_url: { url: references[0] } },
+  ] : text;
+  const reply = await complete(CFG.bridgeModels[job.type], [{ role: 'user', content }], onHeaders);
+  const candidates = reply.match(/https?:\/\/[^\s<>"'\x60)\]]+/gi) || [];
+  for (const candidate of candidates) {
+    try {
+      const target = mediaTarget(candidate.replace(/[.,;，。；]+$/, ''), job.type);
+      if (target) return target.url.href;
+    } catch { /* The response can also contain non-media links. */ }
   }
-  return call('/admin/quota', { method: 'POST', timeout: 150_000 });
+  throw new MuseError('API Bridge 未返回受信任的' + (job.type === 'video' ? '视频' : '图片') + '下载地址');
 }
 
-/* ------------------------------ 视频 ------------------------------ */
-export async function createVideo(payload) {
-  return call('/v1/videos', { method: 'POST', body: payload, timeout: 120_000 });
-}
-
-export async function getVideo(id) {
-  return call(`/v1/videos/${encodeURIComponent(id)}`);
-}
-
-/* ------------------------------ 图片 ------------------------------ */
-export async function createImage(payload) {
-  return call('/v1/images/generations', { method: 'POST', body: payload, timeout: 300_000 });
-}
-
-export async function createImageTask(payload) {
-  return call('/v1/images/tasks', { method: 'POST', body: payload, timeout: 60_000 });
-}
-
-export async function getImageTask(id) {
-  return call(`/v1/images/tasks/${encodeURIComponent(id)}`);
-}
-
-/* ------------------------------ 媒体 ------------------------------ */
-const EXT_BY_KIND = { image: '.webp', video: '.mp4', audio: '.mp3' };
-
-export function extOf(name = '', kind = 'video') {
-  const m = /\.([a-z0-9]{2,5})$/i.exec(name);
-  return m ? `.${m[1].toLowerCase()}` : EXT_BY_KIND[kind] || '.bin';
-}
-
-/**
- * 把上游媒体下载到本地 media 目录，返回本地文件名。
- * 上游重启或清理后仍可回放，这是作品库不丢的前提。
- */
-export async function downloadMedia(mediaPathOrUrl, jobId, kind = 'video', timeout = 300_000) {
-  let pathname = mediaPathOrUrl;
-  if (/^https?:\/\//i.test(pathname)) {
-    const u = new URL(pathname);
-    pathname = u.pathname + u.search;
+export async function downloadMedia(value, jobId, kind) {
+  const target = mediaTarget(value, kind);
+  if (!target) throw new MuseError('媒体下载地址不在允许范围内');
+  const response = await fetch(target.fetchUrl, {
+    redirect: 'error', signal: AbortSignal.timeout(CFG.bridgeDownloadTimeoutMs),
+  });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    throw new MuseError('媒体下载失败（HTTP ' + response.status + '）');
   }
-  const res = await call(pathname, { raw: true, timeout });
-  if (!res.ok) throw new MuseError(`媒体下载失败 HTTP ${res.status}`, res.status);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const fileName = `${jobId}${extOf(pathname, kind)}`;
+
+  const maximum = 100 * 1024 * 1024;
+  const declared = Number(response.headers.get('content-length'));
+  const mime = response.headers.get('content-type')?.split(';')[0];
+  if (declared > maximum || (mime && mime !== 'application/octet-stream' && !mime.startsWith(kind + '/'))) {
+    await response.body.cancel();
+    throw new MuseError('媒体类型无效或文件超过 100 MB');
+  }
+  let bytes = 0;
+  const meter = new Transform({ transform(chunk, _encoding, callback) {
+    bytes += chunk.length;
+    if (bytes > maximum) return callback(new MuseError('媒体文件超过 100 MB'));
+    callback(null, chunk);
+  } });
+  const fileName = jobId + '.' + target.ext;
   const dest = path.join(MEDIA_DIR, fileName);
-  const tmp = `${dest}.part`;
-  fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, dest);
-  return { fileName, bytes: buf.length };
+  const tmp = dest + '.part';
+  try {
+    await pipeline(Readable.fromWeb(response.body), meter, fs.createWriteStream(tmp));
+    if (!bytes || (declared && bytes !== declared)) throw new MuseError('媒体下载不完整');
+    await fs.promises.rename(tmp, dest);
+    return { fileName, bytes };
+  } finally {
+    await fs.promises.rm(tmp, { force: true });
+  }
 }
-
-export { MuseError };

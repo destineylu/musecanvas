@@ -1,16 +1,17 @@
-﻿# MuseAPI-Video 一键启动
+﻿# musecanvas 一键启动
 # 用法：
-#   .\start.ps1          启动上游 + 平台（生产模式，需先有 web\dist）
+#   .\start.ps1          启动 musecanvas 和本机网关（生产模式，需先有 web\dist）
+#   .\start.ps1 -Upstream muse2api  使用原本的账号池
 #   .\start.ps1 -Build   先构建前端再启动
 #   .\start.ps1 -Dev     额外启动前端 dev server (vite, 5173)
 param(
   [switch]$Dev,
-  [switch]$Build
+  [switch]$Build,
+  [ValidateSet("bridge", "muse2api")][string]$Upstream
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$upstream = Join-Path $root 'upstream\muse2api'
 $server = Join-Path $root 'server'
 $web = Join-Path $root 'web'
 
@@ -22,39 +23,23 @@ function Test-Port($port) {
 function Wait-Http($url, $seconds = 40) {
   for ($i = 0; $i -lt $seconds; $i++) {
     try {
-      $r = Invoke-WebRequest -Uri $url -TimeoutSec 2 -UseBasicParsing
-      if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { return $true }
+      & curl.exe --noproxy '*' --silent --fail --max-time 2 -o NUL $url
+      if ($LASTEXITCODE -eq 0) { return $true }
     } catch { }
     Start-Sleep -Seconds 1
   }
   return $false
 }
 
-# 用 WMI 创建**完全脱离**当前进程树的后台进程：
-# 关终端、父进程结束都不影响服务，且不闪黑窗。
 function Start-Detached($exe, $argLine, $workDir, $logFile) {
-  $cmd = "$env:ComSpec /c cd /d `"$workDir`" && `"$exe`" $argLine >> `"$logFile`" 2>&1"
-  $startup = ([wmiclass]'Win32_ProcessStartup').CreateInstance()
-  $startup.ShowWindow = 0            # 注意：不要设 CreateFlags，WMI 会拒绝并返回 21
-  $res = ([wmiclass]'Win32_Process').Create($cmd, $workDir, $startup)
-  return $res.ReturnValue -eq 0
+  $process = Start-Process -FilePath $exe -ArgumentList $argLine -WorkingDirectory $workDir -WindowStyle Hidden -PassThru -RedirectStandardOutput $logFile -RedirectStandardError ($logFile -replace '\.log$', '.err.log')
+  if (-not $process.HasExited) { Set-Content -LiteralPath "$logFile.pid" -Value $process.Id }
+  return -not $process.HasExited
 }
 
 Write-Host ""
-Write-Host "=== MuseAPI-Video 启动 ===" -ForegroundColor Cyan
+Write-Host "=== musecanvas 启动 ===" -ForegroundColor Cyan
 Write-Host ""
-
-# ---------- 1. Python 环境 ----------
-$pyExe = Join-Path $upstream '.venv\Scripts\python.exe'
-if (-not (Test-Path $pyExe)) {
-  Write-Host "[1/4] 创建 Python 虚拟环境并安装依赖…" -ForegroundColor Yellow
-  $py = "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
-  if (-not (Test-Path $py)) { $py = 'python' }
-  & $py -m venv (Join-Path $upstream '.venv')
-  & $pyExe -m pip install -q -r (Join-Path $upstream 'requirements.txt')
-} else {
-  Write-Host "[1/4] Python 环境就绪" -ForegroundColor DarkGray
-}
 
 # ---------- 2. 后端依赖 ----------
 if (-not (Test-Path (Join-Path $server 'node_modules'))) {
@@ -80,40 +65,82 @@ if ($Build -or -not (Test-Path (Join-Path $web 'dist\index.html'))) {
   Write-Host "[3/4] 前端产物已存在（加 -Build 可重新构建）" -ForegroundColor DarkGray
 }
 
-# ---------- 4. 上游 muse2api ----------
-if (Test-Port 18610) {
-  Write-Host "[4/4] 上游 muse2api 已在运行 (18610)" -ForegroundColor DarkGray
-} else {
-  Write-Host "[4/4] 启动上游 muse2api (18610)…" -ForegroundColor Yellow
-  # 固定上游配置目录，并清除可能冲突的旧密钥环境变量，让服务读取本项目 .env。
-  $previousMuseHome = $env:MUSE2API_HOME
-  $previousMuseKey = $env:MUSE2API_KEY
-  $env:MUSE2API_HOME = $upstream
-  Remove-Item Env:MUSE2API_KEY -ErrorAction SilentlyContinue
-  try {
-    $ok = Start-Detached $pyExe "-m uvicorn app:app --host 127.0.0.1 --port 18610" $upstream (Join-Path $upstream 'server.log')
-  } finally {
-    if ($null -eq $previousMuseHome) { Remove-Item Env:MUSE2API_HOME -ErrorAction SilentlyContinue } else { $env:MUSE2API_HOME = $previousMuseHome }
-    if ($null -eq $previousMuseKey) { Remove-Item Env:MUSE2API_KEY -ErrorAction SilentlyContinue } else { $env:MUSE2API_KEY = $previousMuseKey }
+function Read-Setting($name, $fallback) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ($value) { return $value }
+  $line = Get-Content -LiteralPath (Join-Path $server '.env') |
+    Where-Object { $_ -match "^\s*$name\s*=" } | Select-Object -Last 1
+  if ($line) {
+    $value = ($line -split '=', 2)[1].Trim().Trim('"', "'")
+    if ($value) { return $value }
   }
-  if ($ok -and (Wait-Http 'http://127.0.0.1:18610/healthz' 45)) {
-    Write-Host "  上游就绪" -ForegroundColor Green
-  } else {
-    Write-Host "  上游启动失败，看 upstream\muse2api\server.log" -ForegroundColor Red
+  return $fallback
+}
+
+$upstreamDataDir = Read-Setting 'DATA_DIR' (Join-Path $server 'data')
+$upstreamChoiceFile = Join-Path $upstreamDataDir 'upstream.json'
+$upstreamChoice = if (Test-Path -LiteralPath $upstreamChoiceFile) { Get-Content -Raw -LiteralPath $upstreamChoiceFile | ConvertFrom-Json } else { $null }
+$mode = if ($Upstream) { $Upstream.ToLowerInvariant() } elseif ($upstreamChoice.mode) { $upstreamChoice.mode } else { (Read-Setting 'MUA_UPSTREAM' 'bridge').ToLowerInvariant() }
+if ($mode -notin 'bridge','muse2api') { throw 'MUA_UPSTREAM 必须是 bridge 或 muse2api' }
+if ($mode -eq 'bridge') {
+  $url = 'embedded'
+} else {
+  $legacyConfigPath = Join-Path $upstreamDataDir 'muse2api.json'
+  $savedLegacy = if (Test-Path -LiteralPath $legacyConfigPath) { Get-Content -Raw -LiteralPath $legacyConfigPath | ConvertFrom-Json } else { $null }
+  $url = if ($savedLegacy.baseUrl) { $savedLegacy.baseUrl } else { (Read-Setting 'MUSE_BASE' 'http://127.0.0.1:18610').TrimEnd('/') -replace '/v1$','' }
+  $upstreamUri = [uri]$url
+  if ($upstreamUri.Scheme -eq 'http' -and $upstreamUri.Host -in '127.0.0.1','localhost' -and
+      $upstreamUri.Port -eq 18610 -and $upstreamUri.AbsolutePath -eq '/') {
+    if (-not (Test-Port 18610)) {
+      $legacyDir = Join-Path $root 'upstream\muse2api'
+      $python = Join-Path $legacyDir '.venv\Scripts\python.exe'
+      if (-not (Test-Path $python)) {
+        & python -m venv (Join-Path $legacyDir '.venv')
+        if ($LASTEXITCODE -ne 0) { throw 'muse2api Python 环境创建失败' }
+        & $python -m pip install -r (Join-Path $legacyDir 'requirements.txt')
+        if ($LASTEXITCODE -ne 0) { throw 'muse2api 依赖安装失败' }
+      }
+      if (-not (Test-Path (Join-Path $legacyDir '.env'))) { throw '请先配置 upstream\muse2api\.env' }
+      $previousHome = $env:MUSE2API_HOME
+      $previousKey = $env:MUSE2API_KEY
+      try {
+        $env:MUSE2API_HOME = $legacyDir
+        $env:MUSE2API_KEY = $null
+        $ok = Start-Detached $python '-m uvicorn app:app --host 127.0.0.1 --port 18610' $legacyDir (Join-Path $legacyDir 'server.log')
+      } finally {
+        $env:MUSE2API_HOME = $previousHome
+        $env:MUSE2API_KEY = $previousKey
+      }
+      if (-not $ok) { throw 'muse2api 启动失败，查看 upstream\muse2api\server.err.log' }
+    }
+    if (-not (Wait-Http 'http://127.0.0.1:18610/healthz' 30)) { throw 'muse2api 健康检查失败' }
   }
 }
 
 # ---------- 5. 平台后端 ----------
 if (Test-Port 8787) {
+  $current = & curl.exe --noproxy '*' --silent --fail --max-time 3 'http://127.0.0.1:8787/api/health' | ConvertFrom-Json
+  if ($current.service -ne 'mua' -or $current.upstream -ne $url -or $current.upstreamMode -ne $mode) {
+    throw '8787 上的服务配置不同，请先停止该服务再启动 musecanvas。'
+  }
   Write-Host "平台后端已在运行 (8787)" -ForegroundColor DarkGray
 } else {
   Write-Host "启动平台后端 (8787)…" -ForegroundColor Yellow
-  $nodeExe = (Get-Command node).Source
-  $ok = Start-Detached $nodeExe "src/index.js" $server (Join-Path $server 'server.log')
+  $nodeExe = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
+  $previousMode = $env:MUA_UPSTREAM
+  $previousOverride = $env:MUA_UPSTREAM_OVERRIDE
+  try {
+    $env:MUA_UPSTREAM = $mode
+    $env:MUA_UPSTREAM_OVERRIDE = if ($Upstream) { $mode } else { $null }
+    $ok = Start-Detached $nodeExe "src/index.js" $server (Join-Path $server 'server.log')
+  } finally {
+    $env:MUA_UPSTREAM = $previousMode
+    $env:MUA_UPSTREAM_OVERRIDE = $previousOverride
+  }
   if ($ok -and (Wait-Http 'http://127.0.0.1:8787/api/health' 30)) {
     Write-Host "  平台就绪" -ForegroundColor Green
   } else {
-    Write-Host "  平台启动失败，看 server\server.log" -ForegroundColor Red
+    throw "平台启动失败，看 server\server.err.log"
   }
 }
 
@@ -123,20 +150,9 @@ if ($Dev) {
     Write-Host "前端 dev 已在运行 (5173)" -ForegroundColor DarkGray
   } else {
     Write-Host "启动前端 dev server (5173)…" -ForegroundColor Yellow
-    $npmCmd = (Get-Command npm).Source
-    Start-Detached $env:ComSpec "/c `"$npmCmd`" run dev" $web (Join-Path $web 'dev.log')
+    $nodeExe = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
+    Start-Detached $nodeExe 'node_modules/vite/bin/vite.js --host 127.0.0.1' $web (Join-Path $web 'dev.log') | Out-Null
     Start-Sleep -Seconds 3
-  }
-}
-
-# 扩展包（一键绑定用；缺了就补一份）
-$zip = Join-Path $server 'public\mua-account-binding.zip'
-if (-not (Test-Path $zip)) {
-  $extSrc = Join-Path $root 'extension'
-  if (Test-Path $extSrc) {
-    New-Item -ItemType Directory -Force -Path (Join-Path $server 'public') | Out-Null
-    Compress-Archive -Path (Join-Path $extSrc '*') -DestinationPath $zip -CompressionLevel Optimal
-    Write-Host "已打包浏览器扩展 → server\public\mua-account-binding.zip" -ForegroundColor DarkGray
   }
 }
 
@@ -144,7 +160,7 @@ Write-Host ""
 Write-Host "---------------------------------------------" -ForegroundColor Cyan
 Write-Host " 平台入口   http://127.0.0.1:8787" -ForegroundColor White
 if ($Dev) { Write-Host " 前端调试   http://127.0.0.1:5173" -ForegroundColor White }
-Write-Host " 上游引擎   http://127.0.0.1:18610/admin" -ForegroundColor DarkGray
+Write-Host " 上游模式   $mode  $url" -ForegroundColor DarkGray
 Write-Host " 管理员凭据由 server\.env 配置" -ForegroundColor DarkGray
 Write-Host " 停止服务   .\stop.ps1" -ForegroundColor DarkGray
 Write-Host "---------------------------------------------" -ForegroundColor Cyan

@@ -1322,7 +1322,10 @@ class MuseEngine:
 
             if cur_cnt > base_agent_cnt and cur_txt and not has_stop and len(atts) <= base_att_cnt:
                 # Media-status text can precede a real attachment; do not fail on it.
-                is_media_report = self._media_status_pending(cur_txt)
+                # 同理，「收到，我来画」这类确认语也不是拒绝：冷启动时工具卡会晚十几秒出现，
+                # 这里继续等附件，真超时也只会走 MuseGenerationError 换号重试。
+                is_media_report = (self._media_status_pending(cur_txt)
+                                   or self._media_ack_text(cur_txt))
                 if not is_media_report:
                     if cur_txt == last_txt:
                         txt_stable += 1
@@ -1354,9 +1357,9 @@ class MuseEngine:
         return clean[:limit]
 
     @staticmethod
-    def _media_status_pending(text: str) -> bool:
-        """A success claim can precede an attachment; it is never delivery proof."""
-        if re.search(
+    def _media_refusal_like(text: str) -> bool:
+        """Explicit "it did not happen" wording: never a progress signal."""
+        return bool(re.search(
                 r"(?:未|没(?:有)?|无法|不能|未能)[^。！？!?\n]{0,16}(?:生成|制作|提供|完成)|"
                 r"(?:生成|制作|渲染|处理)[^。！？!?\n]{0,12}(?:失败|未成功)|"
                 r"\b(?:not|never|hasn['’]t|wasn['’]t|isn['’]t)\s+(?:(?:be|been|successfully)\s+){0,3}"
@@ -1366,7 +1369,36 @@ class MuseEngine:
                 r"\b(?:failed|cannot|can['’]t|could not|couldn['’]t|unable to)\b"
                 r"[^.\n]{0,60}\b(?:generat(?:e|ed|ing)|creat(?:e|ed|ing)|render|provide|video|image)\b|"
                 r"\b(?:video|image|render|upload)\b[^.\n]{0,32}\bfailed\b",
-                text, re.I):
+                text, re.I))
+
+    @classmethod
+    def _media_ack_text(cls, text: str, limit: int = 600) -> bool:
+        """A short "收到，我来画" ack means generation is under way, not that it failed.
+
+        muse.ai 冷启动或排队时，agent 会先回一句确认，工具卡「🐈 生成图片」可能晚十几秒
+        才出现。把这种句子当成「只返回文本」，会把一次正常的慢启动判成模型拒绝，而拒绝是
+        终态、不换号重试，任务当场失败。这里只认确认语气；带显式失败措辞的句子由
+        _media_refusal_like 排除在外，仍然快速失败。
+        """
+        clean = cls._clean_model_text(text)
+        if not clean or len(clean) > limit:
+            return False
+        if cls._media_refusal_like(clean):
+            return False
+        return bool(re.search(
+            r"收到|明白|好的?[，,、]|我(?:来|这就|马上|立刻)|"
+            r"(?:正在|开始|马上|立刻|稍后)(?:生成|绘制|画)|"
+            r"(?:帮|给)你(?:画|生成|绘制|制作)|请稍等|稍等|请稍候|"
+            r"\bon it\b|\bgot it\b|\bworking on (?:it|that|your)\b|"
+            r"\bi['’]?(?:ll| will| am going to)\s+(?:draw|paint|create|generate|make)\b|"
+            r"\b(?:now\s+)?(?:generating|drawing|creating|painting)\b|"
+            r"\b(?:give me|gimme) a (?:moment|second|minute)\b|\bplease (?:wait|hold on)\b",
+            clean, re.I))
+
+    @classmethod
+    def _media_status_pending(cls, text: str) -> bool:
+        """A success claim can precede an attachment; it is never delivery proof."""
+        if cls._media_refusal_like(text):
             return False
         return bool(re.search(
             r"\.(?:webp|png|jpe?g|mp4|webm)|imagine_media|deliverable|"
@@ -1498,19 +1530,20 @@ class MuseEngine:
 
     def chat_stream(self, cookies: dict, prompt: str, expires: dict | None = None,
                     timeout: int | None = None, account_id: str | None = None,
-                    stop_event=None, reference_files: list[str] | None = None):
+                    stop_event=None, reference_files: list[str] | None = None,
+                    wait_for_final: bool = False):
         """发一条消息，可先附加图片或 Muse 支持的文档。"""
         timeout = int(timeout or getattr(self.cfg, "chat_timeout", 300))
         self.ensure_page(cookies, expires, account_id=account_id)
         self.reset_thread(for_chat=True)
         upload = self._attach_images(reference_files) if reference_files else None
         try:
-            yield from self._chat_stream_ready(prompt, timeout, stop_event)
+            yield from self._chat_stream_ready(prompt, timeout, stop_event, wait_for_final)
         finally:
             if upload:
                 shutil.rmtree(upload["dir"], ignore_errors=True)
 
-    def _chat_stream_ready(self, prompt: str, timeout: int, stop_event=None):
+    def _chat_stream_ready(self, prompt: str, timeout: int, stop_event=None, wait_for_final: bool = False):
         """发一条消息，流式 yield 增量文本。"""
         base_agent, base_text, _ = self._poll_chat()
         self._send(prompt)
@@ -1566,10 +1599,10 @@ class MuseEngine:
             else:
                 stable += 1
                 # Stop 按钮消失说明前端生成彻底结束，连续 3 次（约 0.18s）无新文本即正常退出
-                if not has_stop and stable >= 3:
+                if not has_stop and stable >= (20 if wait_for_final else 3):
                     return
                 # Stop 按钮仍在时绝不过早截断（模型思考、代码块或网络抖动），允许等待至 stable >= 80（约 5s）防卡死
-                if has_stop and stable >= 80:
+                if has_stop and stable >= 80 and not wait_for_final:
                     return
 
         raise MuseGenerationError("等待助手回复超时")

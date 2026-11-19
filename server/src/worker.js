@@ -1,192 +1,188 @@
-import { pendingJobs, updateJob, addCredits, getJob, db, createJob, priceOf } from './db.js';
-import { getVideo, getImageTask, downloadMedia, createVideo, MuseError } from './muse.js';
-
-const TICK_MS = 3000;
-const VIDEO_TIMEOUT_MS = 15 * 60 * 1000;   // 15 分钟
-const IMAGE_TIMEOUT_MS = 8 * 60 * 1000;
+import { CFG, usesMuse2api } from './config.js';
+import { pendingJobs, updateJob, addCredits, getJob, db, createJob } from './db.js';
+import { downloadMedia, generateMedia } from './muse.js';
+import { referenceImage } from './mediaRefs.js';
+import * as legacy from './muse2api.js';
 
 const inflight = new Set();
 
-function failJob(job, message) {
-  updateJob(job.id, { status: 'failed', error: String(message).slice(0, 500), finished_at: Date.now() });
-  if (!job.refunded && job.cost > 0) {
-    try {
-      addCredits(job.userId, job.cost, '任务失败退还', job.id);
-      updateJob(job.id, { refunded: 1 });
-      job.refunded = true;
-    } catch (e) {
-      console.error('[worker] 退款失败', job.id, e.message);
-    }
+function transaction(work) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = work();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
   }
 }
 
-function settleDone(job, payload) {
-  // 上游三种形态都兼容：视频给 url/result.url，图片给 data[0].url，部分走 video.url
-  const url = payload?.url
-    || payload?.result?.url
-    || payload?.video?.url
-    || payload?.data?.[0]?.url
-    || null;
-  if (!url) return failJob(job, '上游未返回媒体地址');
-  const kind = job.type === 'video' ? 'video' : 'image';
-  const account = payload.account || null;
-
-  downloadMedia(url, job.id, kind)
-    .then(({ fileName, bytes }) => {
-      updateJob(job.id, {
-        status: 'completed',
-        progress: 100,
-        media_file: fileName,
-        account_id: account,
-        result: JSON.stringify({ ...(payload.result || {}), url, localUrl: `/media/${fileName}`, bytes }),
-        error: null,
-        finished_at: Date.now(),
-      });
-      console.log(`[worker] 完成 ${job.id} → ${fileName} (${bytes}B)`);
-    })
-    .catch((err) => {
-      // 媒体落地失败也要让用户拿到结果：退回上游直链
-      console.warn('[worker] 媒体下载失败，改用直链', job.id, err.message);
-      updateJob(job.id, {
-        status: 'completed',
-        progress: 100,
-        media_file: null,
-        account_id: account,
-        result: JSON.stringify({ ...(payload.result || {}), url, remote: true }),
-        error: null,
-        finished_at: Date.now(),
-      });
-    });
+function createQueuedJob(userId, type, prompt, params, workspace = {}) {
+  // 本机部署不计积分：生成任务不检查、不扣除积分，失败也无需退还。
+  const cost = 0;
+  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) {
+    throw Object.assign(new Error('账号不存在'), { status: 401 });
+  }
+  const job = createJob(userId, type, prompt, params, cost);
+  updateJob(job.id, { upstream_id: usesMuse2api ? 'muse2api:queued' : 'bridge:queued', project_id: workspace.projectId, canvas_id: workspace.canvasId });
+  return getJob(job.id);
 }
 
-async function pollOne(job) {
+export const enqueueJob = (...args) => transaction(() => createQueuedJob(...args));
+
+const failJob = (id, message) => transaction(() => {
+  const job = getJob(id);
+  if (!job || !['queued', 'processing'].includes(job.status)) return;
+  if (!job.refunded && job.cost > 0) addCredits(job.userId, job.cost, '任务失败退还', job.id);
+  updateJob(id, {
+    status: 'failed', error: String(message).slice(0, 500), finished_at: Date.now(),
+    refunded: job.refunded || job.cost > 0 ? 1 : 0,
+  });
+});
+
+async function runBridgeJob(job) {
   if (inflight.has(job.id)) return;
   inflight.add(job.id);
   try {
-    const limit = job.type === 'video' ? VIDEO_TIMEOUT_MS : IMAGE_TIMEOUT_MS;
-    if (Date.now() - job.createdAt > limit) {
-      return failJob(job, '任务超时，请重试');
+    let url = job.result?.url;
+    if (job.upstreamId === 'bridge:queued') {
+      const references = (job.params.images || []).map(item => referenceImage(job.userId, item));
+      updateJob(job.id, { upstream_id: 'bridge:running', status: 'processing', progress: 15 });
+      url = await generateMedia(job, references);
+      updateJob(job.id, { upstream_id: 'bridge:download', status: 'processing', progress: 85, result: JSON.stringify({ url }) });
+    } else if (job.upstreamId !== 'bridge:download' || !url) {
+      return failJob(job.id, '旧上游任务或已中断的生成无法续接，请重新提交');
     }
+    const { fileName, bytes } = await downloadMedia(url, job.id, job.type);
+    updateJob(job.id, {
+      status: 'completed', progress: 100, media_file: fileName, error: null,
+      result: JSON.stringify({ localUrl: '/media/' + fileName, bytes }), finished_at: Date.now(),
+    });
+  } catch (error) {
+    const timeout = ['TimeoutError', 'AbortError'].includes(error.name);
+    failJob(job.id, timeout ? 'API Bridge 生成或下载超时，请重试' : error.message);
+  } finally {
+    inflight.delete(job.id);
+    queueMicrotask(dispatch);
+  }
+}
 
-    const data = job.type === 'video'
-      ? await getVideo(job.upstreamId)
-      : await getImageTask(job.upstreamId);
-
-    const status = String(data.status || '').toLowerCase();
-    const progress = Number(data.progress) || job.progress || 0;
-
-    if (['completed', 'succeeded', 'success', 'done'].includes(status)) {
-      settleDone(job, data);
-    } else if (['failed', 'error', 'canceled', 'cancelled'].includes(status)) {
-      failJob(job, data.error || '上游生成失败');
-    } else {
-      updateJob(job.id, {
-        status: status === 'processing' ? 'processing' : (job.status === 'processing' ? 'processing' : 'queued'),
-        progress: Math.max(progress, job.progress),
-        account_id: data.account || job.accountId || null,
-      });
+async function runLegacyJob(job) {
+  inflight.add(job.id);
+  try {
+    let url = job.result?.url;
+    let account = job.accountId;
+    if (job.upstreamId === 'muse2api:queued') {
+      const images = (job.params.images || []).map(item => ({ url: referenceImage(job.userId, item) }));
+      const video = job.type === 'video';
+      const payload = { prompt: job.prompt, model: video ? 'muse-video' : 'muse-image', size: job.params.size };
+      if (video) {
+        payload.duration = job.params.duration;
+        if (job.params.extra) payload.extra = job.params.extra;
+      }
+      if (images.length) payload.images = images;
+      updateJob(job.id, { upstream_id: 'muse2api:submitting', status: 'processing', progress: 10 });
+      const task = await (video ? legacy.createVideo(payload) : legacy.createImageTask(payload));
+      const id = task?.id || task?.task_id;
+      if (!id) throw new Error('muse2api 未返回任务 ID');
+      updateJob(job.id, { upstream_id: 'muse2api:id:' + id, result: JSON.stringify({ submittedAt: Date.now() }) });
+      return;
     }
-  } catch (err) {
-    const msg = err instanceof MuseError ? err.message : err.message;
-    // 429/5xx 视为临时错误，继续重试；4xx 明确失败
-    if (err?.status && err.status >= 400 && err.status < 500) {
-      failJob(job, msg);
-    } else {
-      console.warn('[worker] 轮询异常（下轮重试）', job.id, msg);
-      updateJob(job.id, { status: 'processing' });
+    if (job.upstreamId === 'muse2api:submitting') {
+      return failJob(job.id, 'muse2api 提交时进程已退出，无法核对上游任务 ID');
     }
+    if (job.upstreamId !== 'muse2api:download') {
+      const id = job.upstreamId.replace(/^muse2api:id:/, '');
+      const video = job.type === 'video';
+      const submittedAt = job.result?.submittedAt || job.createdAt;
+      if (Date.now() - submittedAt > (video ? 15 : 8) * 60_000) {
+        return failJob(job.id, 'muse2api 任务超时，请重试');
+      }
+      let task;
+      try {
+        task = await (video ? legacy.getVideo(id) : legacy.getImageTask(id));
+      } catch (error) {
+        if (!error.status || error.status === 429 || error.status >= 500) return;
+        throw error;
+      }
+      const state = String(task.status || '').toLowerCase();
+      if (['failed', 'error', 'canceled', 'cancelled'].includes(state)) {
+        return failJob(job.id, task.error?.message || task.error || 'muse2api 生成失败');
+      }
+      account = task.account || account;
+      if (!['completed', 'succeeded', 'success', 'done'].includes(state)) {
+        updateJob(job.id, { status: 'processing', progress: Math.max(Number(task.progress) || 0, job.progress), account_id: account });
+        return;
+      }
+      url = task.url || task.result?.url || task.video?.url || task.data?.[0]?.url;
+      if (!url) throw new Error('muse2api 未返回媒体地址');
+      updateJob(job.id, { upstream_id: 'muse2api:download', status: 'processing', progress: 85, account_id: account, result: JSON.stringify({ url }) });
+    }
+    const { fileName, bytes } = await legacy.downloadMedia(url, job.id, job.type);
+    updateJob(job.id, {
+      status: 'completed', progress: 100, media_file: fileName, account_id: account, error: null,
+      result: JSON.stringify({ localUrl: '/media/' + fileName, bytes }), finished_at: Date.now(),
+    });
+  } catch (error) {
+    failJob(job.id, error.message);
   } finally {
     inflight.delete(job.id);
   }
 }
 
-/* ------------------------- 任务队列：自动执行 ------------------------- */
-const QUEUE_TICK_MS = 20_000;
+const runJob = job => job.upstreamId?.startsWith('bridge:') ? runBridgeJob(job) : runLegacyJob(job);
 
-async function tickQueue() {
-  // 1) 到期的 pending 项 → 创建任务
+function dispatch() {
+  const free = CFG.bridgeConcurrency - inflight.size;
+  if (free <= 0) return;
+  for (const job of pendingJobs().filter(item => item.upstreamId && item.phase !== 'paused' && !inflight.has(item.id)).slice(0, free)) {
+    runJob(job).catch(error => console.error('[worker]', job.id, error.message));
+  }
+}
+
+const scheduleQueue = () => transaction(() => {
   const due = db.prepare(
     "SELECT * FROM queue_items WHERE status = 'pending' AND (next_run_at IS NULL OR next_run_at <= ?) ORDER BY sort_order ASC LIMIT 3"
   ).all(Date.now());
-
-  for (const q of due) {
+  for (const item of due) {
     let params = {};
-    try { params = JSON.parse(q.params || '{}'); } catch { params = {}; }
-
-    const cost = priceOf('video', params);
-    const u = db.prepare('SELECT credits FROM users WHERE id = ?').get(q.user_id);
-    if (!u || u.credits < cost) {
-      db.prepare("UPDATE queue_items SET status = 'paused', note = ? WHERE id = ?")
-        .run(`积分不足（需 ${cost}），任务已暂停`, q.id);
-      continue;
-    }
-
-    const job = createJob(q.user_id, 'video', q.prompt, params, cost);
-    addCredits(q.user_id, -cost, '队列任务执行', job.id);
-
+    try { params = JSON.parse(item.params || '{}'); } catch { /* use defaults */ }
+    const duration = Number(params.duration);
     try {
-      const payload = {
-        prompt: q.prompt,
-        model: 'muse-video',
-        duration: Number(params.duration) || 5,
-        size: params.size || '16:9',
-      };
-      const out = await createVideo(payload);
-      const upstreamId = out?.id || out?.task_id;
-      if (!upstreamId) throw new Error('上游未返回任务 ID');
-
-      updateJob(job.id, { upstream_id: upstreamId, status: 'processing', progress: 15 });
+      const job = createQueuedJob(item.user_id, 'video', item.prompt, {
+        duration: CFG.videoDurations.includes(duration) ? duration : 5,
+        size: CFG.videoSizes.includes(params.size) ? params.size : '16:9',
+      });
       db.prepare("UPDATE queue_items SET status = 'running', job_id = ?, runs = runs + 1, last_run_at = ? WHERE id = ?")
-        .run(job.id, Date.now(), q.id);
-      console.log(`[queue] 执行 ${q.id} → job ${job.id}`);
-    } catch (e) {
-      updateJob(job.id, { status: 'failed', error: e.message, finished_at: Date.now() });
-      addCredits(q.user_id, cost, '队列任务失败退还', job.id);
-      updateJob(job.id, { refunded: 1 });
-      db.prepare("UPDATE queue_items SET status = 'failed', note = ?, runs = runs + 1 WHERE id = ?")
-        .run(String(e.message).slice(0, 200), q.id);
+        .run(job.id, Date.now(), item.id);
+    } catch (error) {
+      if (error.status !== 402) throw error;
+      db.prepare("UPDATE queue_items SET status = 'paused', note = ? WHERE id = ?").run(error.message, item.id);
     }
   }
 
-  // 2) 执行中的项 → 依据任务结果安排下一轮
-  const running = db.prepare("SELECT * FROM queue_items WHERE status = 'running' AND job_id IS NOT NULL").all();
-  for (const q of running) {
-    const job = getJob(q.job_id);
-    if (!job) continue;
-    if (!['completed', 'failed'].includes(job.status)) continue;
-
+  for (const item of db.prepare("SELECT * FROM queue_items WHERE status = 'running' AND job_id IS NOT NULL").all()) {
+    const job = getJob(item.job_id);
+    if (!job || !['completed', 'failed'].includes(job.status)) continue;
     const finished = job.status === 'completed';
-    if (q.runs >= q.max_runs) {
-      db.prepare("UPDATE queue_items SET status = ? , note = ? WHERE id = ?")
-        .run(finished ? 'done' : 'failed', finished ? '全部执行完成' : (job.error || '执行失败'), q.id);
+    if (item.runs >= item.max_runs) {
+      db.prepare('UPDATE queue_items SET status = ?, note = ? WHERE id = ?')
+        .run(finished ? 'done' : 'failed', finished ? '全部执行完成' : (job.error || '执行失败'), item.id);
     } else {
-      const next = Date.now() + q.interval_min * 60_000;
       db.prepare("UPDATE queue_items SET status = 'pending', next_run_at = ?, note = ? WHERE id = ?")
-        .run(next, finished ? '已执行，等待下次' : `本次失败：${String(job.error || '').slice(0, 60)}`, q.id);
+        .run(Date.now() + item.interval_min * 60_000, finished ? '已执行，等待下次' : (job.error || '执行失败'), item.id);
     }
   }
-}
+});
 
 export function startWorker() {
-  let running = false;
-  setInterval(async () => {
-    if (running) return;
-    running = true;
-    try {
-      const jobs = pendingJobs();
-      if (jobs.length) await Promise.all(jobs.map(pollOne));
-    } catch (e) {
-      console.error('[worker] tick 异常', e.message);
-    } finally {
-      running = false;
-    }
-  }, TICK_MS);
-
+  dispatch();
+  setInterval(dispatch, 1000);
   setInterval(() => {
-    tickQueue().catch((e) => console.error('[queue] tick 异常', e.message));
-  }, QUEUE_TICK_MS);
-
-  console.log('[worker] 任务轮询已启动，队列调度每 ' + QUEUE_TICK_MS / 1000 + 's 检查一次');
+    try { scheduleQueue(); dispatch(); }
+    catch (error) { console.error('[queue]', error.message); }
+  }, 20_000);
 }
 
-export { pollOne };
+export { runJob as pollOne };

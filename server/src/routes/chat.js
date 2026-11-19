@@ -2,17 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
-import { CFG } from '../config.js';
+import { CFG, usesMuse2api } from '../config.js';
 import { db, now } from '../db.js';
+import { completeText, textModel } from '../museText.js';
 
 const r = Router();
 const UPLOAD_DIR = path.join(CFG.dataDir, 'uploads');
 const MAX_CHAT_FILES = 10;
-const MAX_CHAT_FILE_BYTES = 48 * 1024 * 1024;
+const MAX_CHAT_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_CHAT_TEXT = 120_000;
 
 export const TEXT_MODELS = [
-  { id: 'muse-spark', name: 'Muse Spark', desc: 'Muse 网页端文本对话' },
+  { get id() { return textModel(); }, name: 'Muse', get desc() { return usesMuse2api ? 'muse2api 对话' : 'API Bridge 对话'; } },
 ];
 
 function ownedCanvas(userId, canvasId) {
@@ -47,23 +48,20 @@ function saveMessages(userId, canvasId, messages) {
   `).run(userId, canvasId, JSON.stringify(messages), now());
 }
 
-function attachmentDataUrl(userId, url) {
+function attachmentDataUrl(userId, url, required) {
   const match = String(url || '').match(/^\/uploads\/(up_[A-Za-z0-9_-]+\.[A-Za-z0-9]+)$/);
   if (!match) throw Object.assign(new Error('附件链接无效，请重新上传'), { status: 400 });
   const file = db.prepare('SELECT filename, mime, bytes FROM uploads WHERE user_id = ? AND filename = ?')
     .get(userId, match[1]);
   if (!file) throw Object.assign(new Error('找不到此附件或当前账号无权读取'), { status: 403 });
-  if (!file.mime.startsWith('image/') && ![
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  ].includes(file.mime)) {
-    throw Object.assign(new Error(`Muse 对话暂不支持此附件类型：${file.mime}`), { status: 400 });
+  if (!file.mime.startsWith('image/') && !(usesMuse2api && ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.mime))) {
+    if (!required) return null;
+    throw Object.assign(new Error('API Bridge 对话支持图片和纯文本附件，请将 PDF 或 Word 内容转换为文本'), { status: 400 });
   }
   const fullPath = path.join(UPLOAD_DIR, file.filename);
   if (!fs.existsSync(fullPath)) throw Object.assign(new Error('附件文件已不存在，请重新上传'), { status: 410 });
   const bytes = fs.statSync(fullPath).size;
-  if (bytes > 40 * 1024 * 1024) throw Object.assign(new Error('单个附件不能超过 40 MB'), { status: 413 });
+  if (bytes > 25 * 1024 * 1024) throw Object.assign(new Error('单个附件不能超过 25 MB'), { status: 413 });
   return { data: `data:${file.mime};base64,${fs.readFileSync(fullPath).toString('base64')}`, bytes };
 }
 
@@ -85,7 +83,7 @@ r.delete('/chat/canvases/:canvasId', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-/** Muse 对话与画布关联，附件会通过上游真实网页聊天输入框附加。 */
+/** Muse 对话与画布关联，图片通过标准消息内容传给 API Bridge。 */
 r.post('/chat', requireAuth, async (req, res) => {
   const canvasId = String(req.body?.canvasId || '');
   if (!canvasId || !ownedCanvas(req.user.id, canvasId)) return res.status(404).json({ error: '画布不存在或无权访问' });
@@ -98,7 +96,7 @@ r.post('/chat', requireAuth, async (req, res) => {
   for (const message of messages) {
     for (const file of message.attachments || []) {
       if (file.text) continue;
-      if (file.url) filesByUrl.set(file.url, file.name);
+      if (file.url) filesByUrl.set(file.url, message === latest);
     }
   }
   if (filesByUrl.size > MAX_CHAT_FILES) {
@@ -106,19 +104,21 @@ r.post('/chat', requireAuth, async (req, res) => {
   }
 
   let totalBytes = 0;
-  const images = [];
+  const images = new Map();
   try {
-    for (const url of filesByUrl.keys()) {
-      const attachment = attachmentDataUrl(req.user.id, url);
+    for (const [url, required] of filesByUrl) {
+      const attachment = attachmentDataUrl(req.user.id, url, required);
+      if (!attachment) continue;
       totalBytes += attachment.bytes;
       if (totalBytes > MAX_CHAT_FILE_BYTES) {
-        return res.status(413).json({ error: '对话附件总大小不能超过 48 MB，请精简附件后重试' });
+        return res.status(413).json({ error: '对话附件总大小不能超过 25 MB，请精简附件后重试' });
       }
-      images.push(attachment.data);
+      images.set(url, attachment.data);
     }
   } catch (error) {
     return res.status(error.status || 400).json({ error: error.message });
   }
+  let encodedBytes = 0;
 
   let totalText = 0;
   for (const message of messages) {
@@ -133,43 +133,33 @@ r.post('/chat', requireAuth, async (req, res) => {
       if (file.text) content += `\n\n【文档：${file.name}】\n${file.text}\n【文档结束】`;
       else if (file.url) content += `\n\n【已附加${file.mime.startsWith('image/') ? '图片' : '文档'}：${file.name}】`;
     }
-    return { role: message.role, content };
+    const parts = message.role === 'user' ? [...new Set((message.attachments || []).filter(file => !file.text && images.has(file.url)).map(file => file.url))] : [];
+    for (const url of parts) encodedBytes += images.get(url).length;
+    return { role: message.role, content: parts.length ? [
+      { type: 'text', text: content },
+      ...parts.map(url => ({ type: 'image_url', image_url: { url: images.get(url) } })),
+    ] : content };
   });
+  if (!usesMuse2api && encodedBytes > 35 * 1024 * 1024) {
+    return res.status(413).json({ error: '累计图片超出对话容量，请精简附件或开启新对话' });
+  }
   try {
     saveMessages(req.user.id, canvasId, messages);
   } catch (error) {
     return res.status(400).json({ error: error.message || '对话内容无法保存' });
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
   try {
-    const upstreamBody = { model: 'muse-spark', messages: museMessages, stream: false };
-    if (images.length) upstreamBody.images = images;
-    const up = await fetch(`${CFG.museBase}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${CFG.museKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(upstreamBody),
-      signal: controller.signal,
-    });
-
-    const text = await up.text();
-    let data;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    if (!up.ok) return res.status(up.status).json({ error: data?.error?.message || data?.detail || `上游 HTTP ${up.status}` });
-
-    const content = String(data?.choices?.[0]?.message?.content ?? '').slice(0, 20_000);
+    const replyModel = textModel();
+    const content = (await completeText(museMessages)).slice(0, 20_000);
     const completed = [...messages, { role: 'assistant', content }].slice(-40);
     saveMessages(req.user.id, canvasId, completed);
-    res.json({ content, model: data?.model || 'muse-spark', usage: data?.usage || null, messages: completed });
+    res.json({ content, model: replyModel, usage: null, messages: completed });
   } catch (error) {
-    const status = error.name === 'AbortError' ? 504 : 502;
-    res.status(status).json({ error: error.name === 'AbortError' ? 'Muse 响应超时，请稍后重试' : `Muse 请求异常：${error.message}` });
-  } finally {
-    clearTimeout(timer);
+    const timedOut = ['TimeoutError', 'AbortError'].includes(error.name);
+    res.status(timedOut ? 504 : (error.status || 502)).json({
+      error: timedOut ? 'Muse 响应超时，请稍后重试' : error.message,
+    });
   }
 });
 

@@ -233,7 +233,7 @@ export const now = () => Date.now();
 
 /* ------------------------------- settings ------------------------------- */
 const DEFAULT_SETTINGS = {
-  siteName: 'Mua',
+  siteName: 'musecanvas',
   signupCredits: String(CFG.signupCredits),
   priceVideoBase: String(CFG.price.videoBase),
   priceVideoPerSecond: String(CFG.price.videoPerSecond),
@@ -242,7 +242,7 @@ const DEFAULT_SETTINGS = {
   notice: '',
 };
 
-db.prepare("UPDATE settings SET value = 'Mua' WHERE key = 'siteName' AND value = 'MuseAPI-Video'").run();
+db.prepare("UPDATE settings SET value = 'musecanvas' WHERE key = 'siteName' AND value IN ('Mua', 'MuseAPI-Video')").run();
 
 export function getSettings() {
   const rows = db.prepare('SELECT key, value FROM settings').all();
@@ -313,6 +313,9 @@ export function shapeJob(j) {
     params,
     upstreamId: j.upstream_id || null,
     status: j.status,
+    phase: j.status === 'queued' ? 'queued' : j.status === 'processing'
+      ? (['bridge:download', 'muse2api:download'].includes(j.upstream_id) ? 'downloading' : 'generating')
+      : j.status,
     progress: j.progress,
     cost: j.cost,
     refunded: !!j.refunded,
@@ -360,7 +363,7 @@ export function listJobs({ userId, type, status, projectId, canvasId, page = 1, 
 
 export function pendingJobs() {
   return db
-    .prepare("SELECT * FROM jobs WHERE status IN ('queued','processing') AND upstream_id IS NOT NULL")
+    .prepare("SELECT * FROM jobs WHERE status IN ('queued','processing') ORDER BY created_at")
     .all()
     .map(shapeJob);
 }

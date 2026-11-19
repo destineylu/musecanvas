@@ -4,7 +4,7 @@ import {
   listAccounts as localAccounts, upsertAccount, deleteAccountRow, db, now,
   createBindCode, getBindCode, finishBindCode, failBindCode,
 } from '../db.js';
-import * as muse from '../muse.js';
+import * as muse from '../muse2api.js';
 
 const r = Router();
 

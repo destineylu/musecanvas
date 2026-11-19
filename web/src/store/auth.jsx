@@ -1,23 +1,22 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api, getToken, setToken } from '../lib/api.js';
+import { api, setToken } from '../lib/api.js';
 
 const Ctx = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
-    if (!getToken()) {
-      setUser(null);
-      setLoading(false);
-      return null;
-    }
     try {
-      const { user: u } = await api.me();
+      const { user: u, token } = await api.localSession();
+      setToken(token);
+      setError('');
       setUser(u);
       return u;
-    } catch {
+    } catch (failure) {
+      setError(failure.message);
       setToken('');
       setUser(null);
       return null;
@@ -53,8 +52,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout, refresh, patchUser }),
-    [user, loading, login, register, logout, refresh, patchUser]
+    () => ({ user, loading, error, login, register, logout, refresh, patchUser }),
+    [user, loading, error, login, register, logout, refresh, patchUser]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

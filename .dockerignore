@@ -1,0 +1,18 @@
+# 构建上下文排除项（构建上下文 = 仓库根目录）
+node_modules
+**/node_modules
+upstream/muse2api/.venv
+upstream/muse2api/data
+server/data
+web/dist
+.git
+recon
+docs
+shots
+*.log
+__pycache__
+**/__pycache__
+*.pyc
+deploy/docker/.env
+**/.env
+**/*.log.pid

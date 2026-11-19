@@ -1,34 +1,19 @@
 import { Router } from 'express';
 import { db, now, getSetting, addCredits } from '../db.js';
 import {
-  createUser, findUserByEmail, verifyPassword, signToken, publicUser,
-  requireAuth, hashPassword, inviteCodeOf, findByInviteCode, invitedUsers,
+  findUserByEmail, verifyPassword, signToken, publicUser,
+  requireAuth, hashPassword, inviteCodeOf, invitedUsers, isLocalRequest, localSession,
 } from '../auth.js';
 
 const r = Router();
 
-r.post('/register', (req, res) => {
-  const { email, password, name, ref } = req.body || {};
-  if (getSetting('allowRegister') === '0') return res.status(403).json({ error: '当前未开放注册' });
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确' });
-  if (!password || String(password).length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-  if (findUserByEmail(email)) return res.status(409).json({ error: '该邮箱已注册' });
-
-  // 邀请关系：邀请人 +50，被邀请人额外 +50
-  const inviter = ref ? findByInviteCode(ref) : null;
-  const user = createUser({ email, password, name, invitedBy: inviter?.id || null });
-
-  if (inviter) {
-    try {
-      addCredits(inviter.id, 50, `邀请新用户 ${user.email.split('@')[0]}`);
-      addCredits(user.id, 50, '受邀注册奖励');
-    } catch (e) {
-      console.error('[invite] 奖励发放失败', e.message);
-    }
-  }
-
-  res.json({ token: signToken(user), user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)) });
+r.post('/local-session', (req, res, next) => {
+  if (!isLocalRequest(req)) return res.status(403).json({ error: '请从本机地址打开程序' });
+  res.set('Cache-Control', 'no-store');
+  try { res.json(localSession(req)); } catch (error) { next(error); }
 });
+
+r.post('/register', (_req, res) => res.status(410).json({ error: '程序已取消注册，请直接打开本机工作区' }));
 
 r.get('/invite', requireAuth, (req, res) => {
   const code = inviteCodeOf(req.user.id);

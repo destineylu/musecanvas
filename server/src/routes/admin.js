@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { requireAuth, requireAdmin, publicUser } from '../auth.js';
-import { db, addCredits, getSettings, setSetting, upsertAccount } from '../db.js';
+import { db, addCredits, getSettings, setSetting } from '../db.js';
 import * as muse from '../muse.js';
+import * as legacy from '../muse2api.js';
+import { usesMuse2api } from '../config.js';
 
 const r = Router();
 r.use(requireAuth, requireAdmin);
@@ -104,42 +106,24 @@ r.patch('/settings', (req, res) => {
 });
 
 r.get('/system', async (_req, res) => {
-  const out = { upstream: null, error: null };
   try {
-    const st = await muse.status();
-    out.upstream = st;
-    for (const a of st.accounts || []) {
-      upsertAccount({
-        upstreamId: a.id,
-        label: a.label,
-        status: a.ok === true ? 'ok' : a.ok === false ? 'error' : 'unknown',
-        expiresAt: a.expires_at || null,
-        quota: a.quota ? JSON.stringify(a.quota) : null,
-        note: a.note || null,
-      });
-    }
-  } catch (e) {
-    out.error = e.message;
+    res.json({ upstream: await (usesMuse2api ? legacy.status() : muse.status()), error: null });
+  } catch (error) {
+    res.json({ upstream: null, error: error.message });
   }
-  res.json(out);
 });
 
 r.post('/keepalive', async (_req, res) => {
-  try {
-    const rows = db.prepare('SELECT * FROM accounts WHERE upstream_id IS NOT NULL').all();
-    const results = [];
-    for (const row of rows) {
-      try {
-        const out = await muse.keepaliveAccount(row.upstream_id);
-        results.push({ id: row.id, label: row.label, ok: true, out });
-      } catch (e) {
-        results.push({ id: row.id, label: row.label, ok: false, error: e.message });
-      }
+  if (!usesMuse2api) return res.status(409).json({ error: '账号保活属于 muse2api' });
+  const results = [];
+  for (const row of db.prepare('SELECT id, label, upstream_id FROM accounts WHERE upstream_id IS NOT NULL').all()) {
+    try {
+      results.push({ id: row.id, label: row.label, ok: true, out: await legacy.keepaliveAccount(row.upstream_id) });
+    } catch (error) {
+      results.push({ id: row.id, label: row.label, ok: false, error: error.message });
     }
-    res.json({ results });
-  } catch (e) {
-    res.status(502).json({ error: e.message });
   }
+  res.json({ results });
 });
 
 export default r;

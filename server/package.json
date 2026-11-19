@@ -1,6 +1,6 @@
 {
   "name": "museapi-video-server",
-  "version": "1.2.12",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Mua 图片与视频创作平台后端：账号池、积分、任务编排、作品库",
@@ -12,6 +12,7 @@
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "jsonrepair": "3.15.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1"
   }

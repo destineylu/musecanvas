@@ -113,7 +113,7 @@ export default function ProjectDetail({ scratch = false }) {
   return (
     <div className="mx-auto w-full max-w-6xl px-7 py-8">
       <button onClick={() => nav(scratch ? '/scratch' : '/projects')} className="mb-5 inline-flex items-center gap-1.5 text-[12px] text-mist-400 transition hover:text-brand-500">
-        <ArrowLeft size={14} /> {scratch ? 'Mua 画布' : '所有项目'}
+        <ArrowLeft size={14} /> {scratch ? '独立画布' : '所有项目'}
       </button>
 
       <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
