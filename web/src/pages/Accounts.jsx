@@ -659,11 +659,11 @@ function BindDrawer({ open, onClose, onDone }) {
           <div className="mt-3 flex items-start gap-3 rounded-xl border border-[#e6eaf2] bg-[#f7f8fc] p-3">
             <Download size={18} className="mt-0.5 shrink-0 text-mist-300" />
             <div className="text-[11.5px] leading-relaxed text-mist-400">
-              <p className="text-[12.5px] font-medium text-[#171a24]">下载 Mua 账号绑定扩展</p>
+              <p className="text-[12.5px] font-medium text-[#171a24]">下载 musecanvas 账号绑定扩展</p>
               解压后在 <code className="rounded bg-white px-1 text-[#171a24]">chrome://extensions</code> 打开「开发者模式」，再加载已解压的扩展程序。支持 Chrome 和 Edge。
             </div>
           </div>
-          <a href="/download/mua-account-binding.zip" download className="mt-3 block">
+          <a href="/download/musecanvas-account-binding.zip" download className="mt-3 block">
             <Button variant="outline" className="w-full">
               立即下载 <ExternalLink size={13} />
             </Button>

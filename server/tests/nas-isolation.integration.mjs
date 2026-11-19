@@ -25,7 +25,7 @@ async function make(name){
  json({ok:true});}).listen(0,'127.0.0.1');await once(remote,'listening');
  const reserve=http.createServer().listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(r=>reserve.close(r));
  const dataDir=path.join(dir,name);fs.mkdirSync(dataDir);
- const child=spawn(process.execPath,['src/index.js'],{env:{...process.env,ACCESS_MODE:'account',DATA_DIR:dataDir,JWT_SECRET:secret,ADMIN_EMAIL:email,ADMIN_PASSWORD:password,HOST:'127.0.0.1',PORT:String(port),MUA_UPSTREAM:'muse2api',MUSE_BASE:'http://127.0.0.1:'+remote.address().port,MUSE_KEY:key,PUBLIC_BASE:'',COOKIE_SECURE:'0'},windowsHide:true,stdio:['ignore','ignore','inherit']});
+ const child=spawn(process.execPath,['src/index.js'],{env:{...process.env,ACCESS_MODE:'account',DATA_DIR:dataDir,JWT_SECRET:secret,ADMIN_EMAIL:email,ADMIN_PASSWORD:password,HOST:'127.0.0.1',PORT:String(port),MUSECANVAS_UPSTREAM:'muse2api',MUSE_BASE:'http://127.0.0.1:'+remote.address().port,MUSE_KEY:key,PUBLIC_BASE:'',COOKIE_SECURE:'0'},windowsHide:true,stdio:['ignore','ignore','inherit']});
  const instance={name,email,password,key,secret,child,remote,calls,base:'http://127.0.0.1:'+port,dataDir};instances.push(instance);
  await until(async()=>{try{return(await fetch(instance.base+'/api/health')).ok;}catch{return false;}},Boolean);
  return instance;
@@ -77,7 +77,7 @@ try{
  const ma=path.join(dir,'manifest-alice'),mb=path.join(dir,'manifest-bob');assert.notEqual(fs.readFileSync(path.join(ma,'.env'),'utf8'),fs.readFileSync(path.join(mb,'.env'),'utf8'));
  for(const folder of [ma,mb]){
   const manifest=JSON.parse(execFileSync('docker',['compose','--project-directory',folder,'-f',path.join(folder,'compose.yml'),'config','--format','json'],{encoding:'utf8',stdio:['ignore','pipe','pipe']}));
-  assert.equal(manifest.services.app.environment.ACCESS_MODE,'account');assert.equal(manifest.services.muse2api.ports,undefined);assert.equal(manifest.services.app.environment.MUSE_KEY,manifest.services.muse2api.environment.MUSE2API_KEY);assert.equal(manifest.services.app.environment.MUSE_BASE,'http://muse2api:18610');
+  assert.equal(manifest.services.app.environment.ACCESS_MODE,'account');assert.equal(manifest.services.muse2api,undefined);assert.equal(manifest.services.app.environment.EMBEDDED_ENGINE,'1');assert.ok(manifest.services.app.environment.MUSE_KEY);assert.equal(manifest.services.app.environment.MUSE_BASE,'http://127.0.0.1:18610');
  }
  assert.throws(()=>execFileSync(process.execPath,[path.join(root,'deploy/nas/create-instance.mjs'),'--name','alice','--email','alice@example.test','--output',ma],{stdio:'pipe'}));
  // Browser: account login, reload via private cookie, logout and inaccessible media.

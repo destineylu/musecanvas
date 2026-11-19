@@ -242,7 +242,7 @@ const DEFAULT_SETTINGS = {
   notice: '',
 };
 
-db.prepare("UPDATE settings SET value = 'musecanvas' WHERE key = 'siteName' AND value IN ('Mua', 'MuseAPI-Video')").run();
+db.prepare("UPDATE settings SET value = 'musecanvas' WHERE key = 'siteName'").run();
 
 export function getSettings() {
   const rows = db.prepare('SELECT key, value FROM settings').all();

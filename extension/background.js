@@ -1,4 +1,4 @@
-/* Mua 账号绑定 —— background service worker
+/* musecanvas 账号绑定 —— background service worker
  *
  * 这个扩展只做一件事：
  *   用 chrome.cookies 读 muse.ai 的登录态（hatch_sess 等 HttpOnly cookie 只有

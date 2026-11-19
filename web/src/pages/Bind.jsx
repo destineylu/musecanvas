@@ -27,7 +27,7 @@ export default function Bind() {
     const onMsg = (e) => {
       if (e.origin !== location.origin) return;
       const d = e.data;
-      if (!d || d.source !== 'museapi-video-ext') return;
+      if (!d || d.source !== 'musecanvas-ext') return;
       if (d.type === 'done') {
         setStatus('done');
         setMessage(d.warning || '绑定成功');
@@ -46,7 +46,7 @@ export default function Bind() {
     if (!code) return undefined;
 
     const checkExt = () => {
-      if (document.documentElement.getAttribute('data-museapi-video-ext') === '1') setExtDetected(true);
+      if (document.documentElement.getAttribute('data-musecanvas-ext') === '1') setExtDetected(true);
     };
     const t = setTimeout(checkExt, 600);
 
@@ -97,9 +97,9 @@ export default function Bind() {
 
       <div className="relative w-full max-w-[440px] fade-in">
         <div className="mb-6 flex flex-col items-center gap-2.5">
-          <img src="/brand/mua-icon.png" alt="Mua" draggable="false" className="h-14 w-14 rounded-[20px] border border-white bg-white object-cover shadow-xl shadow-brand-600/15" />
+          <img src="/brand/musecanvas-cat.png" alt="musecanvas" draggable="false" className="h-14 w-14 rounded-[20px] border border-white bg-white object-cover shadow-xl shadow-brand-600/15" />
           <div className="text-center">
-            <p className="font-display text-[20px] font-extrabold brand-text">Mua</p>
+            <p className="font-display text-[20px] font-extrabold brand-text">musecanvas</p>
             <h1 className="mt-1 text-[19px] font-semibold tracking-tight text-[#171a24]">绑定 muse.ai 账号</h1>
           </div>
           <p className="text-[12.5px] text-mist-400">浏览器扩展会自动读取登录态，无需 F12</p>
@@ -132,7 +132,7 @@ export default function Bind() {
                   <p className="mt-1 text-[11.5px] leading-relaxed text-mist-400">
                     {extDetected
                       ? '如果一直停在这里，多半是这个浏览器没登录 muse.ai。登录后刷新本页。'
-                      : '这个页面需要「Mua 账号绑定」扩展才能自动读取。没装的话看下面的说明。'}
+                      : '这个页面需要「musecanvas 账号绑定」扩展才能自动读取。没装的话看下面的说明。'}
                   </p>
                 </div>
               </div>
@@ -182,7 +182,7 @@ export default function Bind() {
                 <li>点「加载已解压的扩展程序」，选解压出来的文件夹</li>
                 <li>回到本页刷新，扩展会自动完成绑定</li>
               </ol>
-              <a href="/download/mua-account-binding.zip" download>
+              <a href="/download/musecanvas-account-binding.zip" download>
                 <Button size="sm" variant="soft" className="mt-3 w-full">下载扩展包</Button>
               </a>
             </div>

@@ -80,8 +80,8 @@ function Read-Setting($name, $fallback) {
 $upstreamDataDir = Read-Setting 'DATA_DIR' (Join-Path $server 'data')
 $upstreamChoiceFile = Join-Path $upstreamDataDir 'upstream.json'
 $upstreamChoice = if (Test-Path -LiteralPath $upstreamChoiceFile) { Get-Content -Raw -LiteralPath $upstreamChoiceFile | ConvertFrom-Json } else { $null }
-$mode = if ($Upstream) { $Upstream.ToLowerInvariant() } elseif ($upstreamChoice.mode) { $upstreamChoice.mode } else { (Read-Setting 'MUA_UPSTREAM' 'bridge').ToLowerInvariant() }
-if ($mode -notin 'bridge','muse2api') { throw 'MUA_UPSTREAM 必须是 bridge 或 muse2api' }
+$mode = if ($Upstream) { $Upstream.ToLowerInvariant() } elseif ($upstreamChoice.mode) { $upstreamChoice.mode } else { (Read-Setting 'MUSECANVAS_UPSTREAM' 'bridge').ToLowerInvariant() }
+if ($mode -notin 'bridge','muse2api') { throw 'MUSECANVAS_UPSTREAM 必须是 bridge 或 muse2api' }
 if ($mode -eq 'bridge') {
   $url = 'embedded'
 } else {
@@ -120,22 +120,22 @@ if ($mode -eq 'bridge') {
 # ---------- 5. 平台后端 ----------
 if (Test-Port 8787) {
   $current = & curl.exe --noproxy '*' --silent --fail --max-time 3 'http://127.0.0.1:8787/api/health' | ConvertFrom-Json
-  if ($current.service -ne 'mua' -or $current.upstream -ne $url -or $current.upstreamMode -ne $mode) {
+  if ($current.service -ne 'musecanvas' -or $current.upstream -ne $url -or $current.upstreamMode -ne $mode) {
     throw '8787 上的服务配置不同，请先停止该服务再启动 musecanvas。'
   }
   Write-Host "平台后端已在运行 (8787)" -ForegroundColor DarkGray
 } else {
   Write-Host "启动平台后端 (8787)…" -ForegroundColor Yellow
   $nodeExe = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
-  $previousMode = $env:MUA_UPSTREAM
-  $previousOverride = $env:MUA_UPSTREAM_OVERRIDE
+  $previousMode = $env:MUSECANVAS_UPSTREAM
+  $previousOverride = $env:MUSECANVAS_UPSTREAM_OVERRIDE
   try {
-    $env:MUA_UPSTREAM = $mode
-    $env:MUA_UPSTREAM_OVERRIDE = if ($Upstream) { $mode } else { $null }
+    $env:MUSECANVAS_UPSTREAM = $mode
+    $env:MUSECANVAS_UPSTREAM_OVERRIDE = if ($Upstream) { $mode } else { $null }
     $ok = Start-Detached $nodeExe "src/index.js" $server (Join-Path $server 'server.log')
   } finally {
-    $env:MUA_UPSTREAM = $previousMode
-    $env:MUA_UPSTREAM_OVERRIDE = $previousOverride
+    $env:MUSECANVAS_UPSTREAM = $previousMode
+    $env:MUSECANVAS_UPSTREAM_OVERRIDE = $previousOverride
   }
   if ($ok -and (Wait-Http 'http://127.0.0.1:8787/api/health' 30)) {
     Write-Host "  平台就绪" -ForegroundColor Green

@@ -80,7 +80,7 @@ app.use('/uploads', protectFile('uploads'), express.static(path.join(CFG.dataDir
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    service: 'mua',
+    service: 'musecanvas',
     time: Date.now(),
     version: CFG.appVersion,
     upstreamMode,
@@ -106,8 +106,8 @@ app.get(['/api/bridge/status', '/api/upstream/status'], requireAuth, async (_req
   }
 });
 app.use('/api/accounts', accountRoutes);
-  app.get('/download/museapi-video-extension.zip', (_req, res) => res.redirect(301, '/download/mua-account-binding.zip'));
-  app.get('/download/mua-account-binding.zip', (_req, res) => res.sendFile(path.join(ROOT, 'public', 'mua-account-binding.zip')));
+  app.get('/download/museapi-video-extension.zip', (_req, res) => res.redirect(301, '/download/musecanvas-account-binding.zip'));
+  app.get('/download/musecanvas-account-binding.zip', (_req, res) => res.sendFile(path.join(ROOT, 'public', 'musecanvas-account-binding.zip')));
 app.use('/api/admin', adminRoutes);
 app.use('/api', apiKeyRoutes);   // /api/keys
 app.use('/api', billingRoutes);

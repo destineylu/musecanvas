@@ -2,7 +2,7 @@
 $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root 'extension'
 $outDir = Join-Path $root 'server\public'
-$out = Join-Path $outDir 'mua-account-binding.zip'
+$out = Join-Path $outDir 'musecanvas-account-binding.zip'
 
 if (-not (Test-Path $src)) { Write-Host "扩展目录不存在: $src" -ForegroundColor Red; exit 1 }
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null

@@ -10,7 +10,7 @@ const mock=http.createServer(async(req,res)=>{
 }).listen(0,'127.0.0.1');await once(mock,'listening');
 const remote='http://127.0.0.1:'+mock.address().port;
 fs.writeFileSync(path.join(dir,'bridges.json'),JSON.stringify({bridges:[{id:'test',name:'测试节点',baseUrl:remote+'/v1',fileBaseUrl:remote,token:'private-test-key',enabled:true,maxConcurrency:1}]}));
-const server=spawn(process.execPath,['src/index.js'],{env:{...process.env,DATA_DIR:dir,PORT:'18772',HOST:'127.0.0.1',JWT_SECRET:secret,MUA_UPSTREAM:'bridge',ADMIN_EMAIL:'admin@example.test',ADMIN_PASSWORD:secret},stdio:['ignore','ignore','inherit']});
+const server=spawn(process.execPath,['src/index.js'],{env:{...process.env,DATA_DIR:dir,PORT:'18772',HOST:'127.0.0.1',JWT_SECRET:secret,MUSECANVAS_UPSTREAM:'bridge',ADMIN_EMAIL:'admin@example.test',ADMIN_PASSWORD:secret},stdio:['ignore','ignore','inherit']});
 const origin='http://127.0.0.1:18772';const wait=ms=>new Promise(r=>setTimeout(r,ms));
 let chrome;
 try{

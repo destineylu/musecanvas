@@ -1,16 +1,16 @@
-# Mua —— NAS / Docker 部署
+# musecanvas —— NAS / Docker 部署
 # 用法（在本目录）：cp .env.example .env && 改好 .env，然后 docker compose up -d --build
 #
 # 将 BRIDGE_BASE_URL 配置为容器可访问的 MuseFlow 或 API Bridge 地址。
-# Mua 使用 SQLite，本部署运行一个实例。
+# musecanvas 使用 SQLite，本部署运行一个实例。
 
 services:
-  mua:
+  musecanvas:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     image: musecanvas:1.0
-    container_name: mua
+    container_name: musecanvas
     restart: unless-stopped
 
     env_file:
@@ -25,9 +25,13 @@ services:
       - "8787:8787"     # 建议只绑内网： "192.168.1.10:8787:8787"
 
     volumes:
-      - ./data/server:/app/server/data                 # SQLite、作品、上传
+      - ./data/server:/app/server/data
+      - ./data/engine:/app/engine
 
-    mem_limit: 2g              # 3 人以内够用；生视频多可放宽
+    shm_size: 256m
+    mem_limit: 1536m
+    cpus: 0.75
+    pids_limit: 384
     logging:
       driver: json-file
       options:

@@ -1,4 +1,4 @@
-/* Mua 账号绑定 —— popup 手动兜底
+/* musecanvas 账号绑定 —— popup 手动兜底
  * 如果 /bind 页面自动流程走不通，可以在这里手动填平台地址 + 绑定码。
  */
 
@@ -26,6 +26,16 @@ $('go').addEventListener('click', async () => {
 
   if (!api) return log('请先填平台地址', 'err');
   if (!code) return log('请先填绑定码', 'err');
+  let origin;
+  try {
+    const target=new URL(api);
+    if(!['http:','https:'].includes(target.protocol)||target.username||target.password||target.pathname!=='/'||target.search||target.hash)throw new Error();
+    origin=target.origin+'/*';
+  } catch { return log('平台地址需为 HTTP(S) 根地址，例如 http://NAS地址:8781', 'err'); }
+  // NAS access is granted for the user-entered origin only, through Chrome's prompt.
+  try {
+    if(!await chrome.permissions.contains({origins:[origin]})&&!await chrome.permissions.request({origins:[origin]}))return log('未授权连接该工作区，未读取或发送 Muse Cookie', 'err');
+  }catch(e){return log('工作区授权失败：'+e.message,'err');}
 
   $('go').disabled = true;
   log('正在读取 muse.ai 的 Cookie…');

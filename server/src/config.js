@@ -10,8 +10,8 @@ const num = (v, d) => (v === undefined || v === '' || Number.isNaN(Number(v)) ? 
 
 const upstreamFile = path.join(process.env.DATA_DIR || path.join(ROOT, 'data'), 'upstream.json');
 const savedUpstream = fs.existsSync(upstreamFile) ? JSON.parse(fs.readFileSync(upstreamFile, 'utf8')).mode : null;
-export let upstreamMode = (process.env.MUA_UPSTREAM_OVERRIDE || savedUpstream || process.env.MUA_UPSTREAM || 'bridge').trim().toLowerCase();
-if (!['bridge', 'muse2api'].includes(upstreamMode)) throw new Error('MUA_UPSTREAM 必须是 bridge 或 muse2api');
+export let upstreamMode = (process.env.MUSECANVAS_UPSTREAM_OVERRIDE || savedUpstream || process.env.MUSECANVAS_UPSTREAM || 'bridge').trim().toLowerCase();
+if (!['bridge', 'muse2api'].includes(upstreamMode)) throw new Error('MUSECANVAS_UPSTREAM 必须是 bridge 或 muse2api');
 export let usesMuse2api = upstreamMode === 'muse2api';
 
 export function setUpstreamMode(mode) {

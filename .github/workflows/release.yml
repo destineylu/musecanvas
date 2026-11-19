@@ -1,0 +1,32 @@
+name: Publish installer
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag
+        required: true
+        default: v1.0.0
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/package-release.py
+      - name: Build portable amd64 container image
+        run: |
+          docker build -t musecanvas:1.0 -f deploy/docker/Dockerfile .
+          docker save musecanvas:1.0 | gzip -1 > dist-release/musecanvas-image-amd64.tar.gz
+          cd dist-release
+          sha256sum musecanvas-image-amd64.tar.gz >> SHA256SUMS
+      - name: Publish downloadable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "musecanvas $TAG" --notes-file deploy/RELEASE.md
+          gh release upload "$TAG" dist-release/* --clobber

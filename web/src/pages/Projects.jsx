@@ -4,7 +4,7 @@ import { ArrowUpRight, Folder, Layers3, Pencil, Plus, Sparkles, Trash2 } from 'l
 import { api } from '../lib/api.js';
 import { Button, Field, Input, Modal, Spinner, useToast } from '../components/ui.jsx';
 
-const MIGRATED_KEY = 'mua_legacy_workspace_migrated';
+const MIGRATED_KEY = 'musecanvas_legacy_workspace_migrated';
 
 function readJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; }

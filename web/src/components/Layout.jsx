@@ -20,7 +20,7 @@ export default function Layout() {
   const { pathname } = useLocation();
   const inCanvas = /^(?:\/scratch)?\/canvas\/[^/]+\/?$/.test(pathname);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const sidebarKey = `mua_sidebar_expanded_${user?.id || user?.email || 'default'}`;
+  const sidebarKey = `musecanvas_sidebar_expanded_${user?.id || user?.email || 'default'}`;
   const [navigationExpanded, setNavigationExpanded] = useState(() => {
     try { return localStorage.getItem(sidebarKey) !== '0'; } catch { return true; }
   });

@@ -37,7 +37,7 @@ const origin='http://127.0.0.1:'+port,remote='http://127.0.0.1:'+mock.address().
 let server,token,chrome,browserSend;
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function boot(){
-  server=spawn(process.execPath,['src/index.js'],{env:{...process.env,DATA_DIR:dir,PORT:String(port),HOST:'127.0.0.1',JWT_SECRET:secret,MUA_UPSTREAM:'bridge',ADMIN_EMAIL:'models@example.test',ADMIN_PASSWORD:secret},stdio:['ignore','ignore','pipe'],windowsHide:true});
+  server=spawn(process.execPath,['src/index.js'],{env:{...process.env,DATA_DIR:dir,PORT:String(port),HOST:'127.0.0.1',JWT_SECRET:secret,MUSECANVAS_UPSTREAM:'bridge',ADMIN_EMAIL:'models@example.test',ADMIN_PASSWORD:secret},stdio:['ignore','ignore','pipe'],windowsHide:true});
   let errors='';server.stderr.on('data',c=>{errors+=c;});
   for(let i=0;i<60;i++){try{if((await fetch(origin+'/api/health')).ok)return;}catch{}if(server.exitCode!==null)throw Error(errors);await wait(100);}throw Error('server boot timed out');
 }

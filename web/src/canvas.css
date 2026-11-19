@@ -43,7 +43,7 @@ html[data-resolved="dark"] .mf-studio {
   --mf-shadow-lg: 0 30px 70px -20px #000000cc;
 }
 
-.mf-studio .mua-viewport .dot-grid {
+.mf-studio .musecanvas-viewport .dot-grid {
   background-color: var(--mf-board);
   background-image: radial-gradient(var(--mf-dot) 1px, transparent 1.2px);
 }
@@ -145,7 +145,7 @@ html[data-resolved="dark"] .mf-studio {
 }
 .mf-studio .muse-minimap .dot-grid { background-color: var(--mf-board); }
 
-.mf-task-panel.mua-task-panel {
+.mf-task-panel.musecanvas-task-panel {
   top: 62px;
   right: 12px;
   z-index: 33;
@@ -154,7 +154,7 @@ html[data-resolved="dark"] .mf-studio {
   background: var(--mf-surface);
   box-shadow: var(--mf-shadow-lg);
 }
-.mf-task-panel.mua-task-panel header { border-color: var(--mf-line); }
+.mf-task-panel.musecanvas-task-panel header { border-color: var(--mf-line); }
 .mf-task-panel li button { gap: 10px; }
 .mf-task-panel li button > div { flex: 1; min-width: 0; }
 .mf-task-panel li button:hover { background: var(--mf-hover); }
@@ -639,7 +639,7 @@ html[data-resolved="dark"] .mf-modal-card { --mf-accent: #5fd6b1; --mf-accent-in
 }
 
 /* overflow:hidden 的容器仍可被 focus / scrollIntoView 滚动，会把悬浮栏推出视口；clip 禁止任何滚动。 */
-.mf-studio, .mf-studio .muse-workbench, .mf-studio .mua-viewport, .mf-studio .mua-viewport > .dot-grid { overflow: clip; }
+.mf-studio, .mf-studio .muse-workbench, .mf-studio .musecanvas-viewport, .mf-studio .musecanvas-viewport > .dot-grid { overflow: clip; }
 
 /* ------------------------------ 三维打光 / 多角度窗口 ------------------------------ */
 .mf-modal.is-soft { background: #05070a80; backdrop-filter: blur(3px); }

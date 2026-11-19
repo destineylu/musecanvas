@@ -1,5 +1,9 @@
 # musecanvas 创作画布
 
+[免费下载一键安装版](https://github.com/destineylu/musecanvas/releases/latest) · [NAS 安装说明](deploy/nas/README.md)
+
+已有 Docker / Compose 的 Linux 或 NAS：`curl -fsSL https://github.com/destineylu/musecanvas/releases/latest/download/install.sh | bash`。安装包不含个人账号或密钥，x86_64 默认下载安装预构建镜像；ARM64 / --build 模式联网构建。
+
 musecanvas 用节点画布组织文字、图片和视频。对话和生成可通过 API Bridge 或原有 muse2api 账号池。已有项目、画布和本地素材继续由 `server/data` 保存。
 
 完整操作步骤见 [使用说明](docs/使用说明.md)。程序内「使用教程」包含「创作流程」和「接入与排错」。
@@ -9,7 +13,7 @@ musecanvas 用节点画布组织文字、图片和视频。对话和生成可通
 使用 Node.js 24。接入内网 Bridge 时先连接 Tailscale。
 
 ```powershell
-Set-Location -LiteralPath 'F:\程序\Mua'
+Set-Location -LiteralPath 'F:\程序\musecanvas'
 .\start.ps1 -Build
 ```
 
@@ -23,7 +27,7 @@ Set-Location -LiteralPath 'F:\程序\Mua'
 
 在「设置 → 接入方式」点击「切换到 API Bridge」或「切换到 muse2api」，新任务立即生效，无需重启。切换前检查目标连接及鉴权，失败时保持原方式。本机默认 muse2api 未运行时自动启动。已有任务继续使用提交时的上游，两种上游的任务可同时完成。
 
-选择保存到 `server/data/upstream.json`，下次启动自动恢复。未保存时使用 `MUA_UPSTREAM` 默认值。命令行 `-Upstream` 仍可覆盖本次启动，但日常切换直接在设置页面进行。
+选择保存到 `server/data/upstream.json`，下次启动自动恢复。未保存时使用 `MUSECANVAS_UPSTREAM` 默认值。命令行 `-Upstream` 仍可覆盖本次启动，但日常切换直接在设置页面进行。
 
 使用 muse2api 时，`MUSE_BASE` 默认是 `http://127.0.0.1:18610`，`MUSE_KEY` 填上游的 `MUSE2API_KEY`。本机默认地址可由启动脚本启动 `upstream/muse2api`，其配置在 `upstream/muse2api/.env`。两种启动模式下均可从「设置 → 接入方式 → muse2api 设置与测试」查看连接、测试鉴权和进入账号池，继续导入账号、绑定浏览器、查看额度和管理调度。管理员可独立保存 muse2api 地址与密钥到 `server/data/muse2api.json`，优先于环境变量并立即生效，密钥留空保留原值。对应类别的默认模型选择 Muse 时，画布新任务使用设置页选中的 Muse 接入方式。
 
@@ -31,7 +35,7 @@ Set-Location -LiteralPath 'F:\程序\Mua'
 
 节点和密钥保存在 `server/data/bridges.json`。管理 API 仅返回密钥是否已设置。模型映射默认将 `muse`、`muse-image` 和 `muse-video` 转换为上游 `muse`。可为模型限定节点，未限定时使用所有启用节点。编辑节点时密钥留空会保留原值。
 
-内置调度器直接连接远端 `/v1/chat/completions`。对外接口继续提供 `/v1/models` 和 `/v1/chat/completions`，使用 Mua 签发的 API Key。生成期间发送 SSE 心跳，上游请求结束后释放节点。文件通过本程序的 `/bridge-media/` 代理下载，已下载素材保存在本机。
+内置调度器直接连接远端 `/v1/chat/completions`。对外接口继续提供 `/v1/models` 和 `/v1/chat/completions`，使用 musecanvas 签发的 API Key。生成期间发送 SSE 心跳，上游请求结束后释放节点。文件通过本程序的 `/bridge-media/` 代理下载，已下载素材保存在本机。
 
 API 地址示例为 `http://100.x.x.x:8080/v1`，文件地址为 `http://100.x.x.x:8081`。「测试」检查健康、模型鉴权和文件服务。调度器会跳过不健康和忙碌节点，并按配置重试。所有已登录用户都可在「接入方式」查看 Bridge 节点、模型映射、调度设置和请求记录，并在「测试台」测试对话、图片及视频。修改节点、密钥和调度配置需要管理员账号。
 
@@ -93,7 +97,7 @@ API 地址示例为 `http://100.x.x.x:8080/v1`，文件地址为 `http://100.x.x
 
 ### NAS 多人隔离部署
 
-使用 [NAS 独立工作区方案](deploy/nas/README.md)，每人一组 musecanvas + muse2api 容器及独立入口，分别登录、绑定自己的 Muse 账号和 API 密钥。**这不是一个共享实例里的多个用户**；不共享账号池、Cookie、浏览器 profile、数据库、模型配置或数据卷。生成器：
+使用 [NAS 独立工作区方案](deploy/nas/README.md)，每人一个内置 Muse 引擎的 musecanvas 容器及独立入口，分别登录、绑定自己的 Muse 账号和 API 密钥。**这不是一个共享实例里的多个用户**；不共享账号池、Cookie、浏览器 profile、数据库、模型配置或数据卷。生成器：
 
 ```sh
 node deploy/nas/create-instance.mjs --name alice --email alice@example.com --port 8788 --url https://alice.canvas.example.com

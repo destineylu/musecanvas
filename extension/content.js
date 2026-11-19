@@ -1,4 +1,4 @@
-/* Mua 账号绑定 —— content script
+/* musecanvas 账号绑定 —— content script
  *
  * 只在平台的 /bind/<code> 页面上工作：把这个一次性 code 交给 background，
  * background 读完 muse.ai 的 cookie 后回传结果，页面据此更新 UI。
@@ -11,10 +11,10 @@
   const api = location.origin;
 
   // 让页面知道扩展已就位
-  document.documentElement.setAttribute('data-museapi-video-ext', '1');
+  document.documentElement.setAttribute('data-musecanvas-ext', '1');
 
   const post = (payload) => {
-    window.postMessage({ source: 'museapi-video-ext', ...payload }, location.origin);
+    window.postMessage({ source: 'musecanvas-ext', ...payload }, location.origin);
   };
 
   const submitFromPage = (payload) => new Promise((resolve) => {

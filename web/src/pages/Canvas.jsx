@@ -214,8 +214,8 @@ export default function Canvas() {
   const [guideOpen, setGuideOpen] = useState(false);
   const [directorId, setDirectorId] = useState(null);
   const [workbench, setWorkbench] = useState(null);
-  const [minimapOpen, setMinimapOpen] = useState(() => { try { return localStorage.getItem('mua_minimap') !== '0'; } catch { return true; } });
-  const clipboardKey = `mua_canvas_clipboard_${user?.id || user?.email || 'account'}`;
+  const [minimapOpen, setMinimapOpen] = useState(() => { try { return localStorage.getItem('musecanvas_minimap') !== '0'; } catch { return true; } });
+  const clipboardKey = `musecanvas_canvas_clipboard_${user?.id || user?.email || 'account'}`;
 
   const viewportRef = useRef(null);
   const dragRef = useRef(null);
@@ -347,7 +347,7 @@ export default function Canvas() {
   useEffect(() => {
     const handleWheel = (event) => {
       const viewport = viewportRef.current;
-      const studio = viewport?.closest('.mua-viewport');
+      const studio = viewport?.closest('.musecanvas-viewport');
       if (!viewport || !studio?.contains(event.target)) return;
       // 面板、对话框、菜单内部保留自身滚动；其余位置（含节点、工具条、提示词编辑器）滚轮缩放画布。
       if (event.target.closest?.('.mf-tool-panel, .muse-assistant, .mf-task-panel, .mf-menu, .muse-minimap')) {
@@ -1211,7 +1211,7 @@ export default function Canvas() {
   }, [selected, tool]);
 
   useEffect(() => {
-    try { localStorage.setItem('mua_minimap', minimapOpen ? '1' : '0'); } catch { /* 仅影响本机偏好 */ }
+    try { localStorage.setItem('musecanvas_minimap', minimapOpen ? '1' : '0'); } catch { /* 仅影响本机偏好 */ }
   }, [minimapOpen]);
 
   const nodeById = Object.fromEntries(doc.nodes.map((n) => [n.id, n]));
@@ -1271,9 +1271,9 @@ export default function Canvas() {
     : [];
 
   return (
-    <div className="mua-studio mf-studio relative h-full min-h-0">
+    <div className="musecanvas-studio mf-studio relative h-full min-h-0">
       <div className="muse-workbench relative h-full min-h-0 min-w-0">
-      <div className="mua-viewport relative h-full min-h-0 min-w-0 overflow-hidden">
+      <div className="musecanvas-viewport relative h-full min-h-0 min-w-0 overflow-hidden">
         <div
           ref={viewportRef}
           data-canvasbg="1"
@@ -1512,7 +1512,7 @@ export default function Canvas() {
         </div>
 
         {activityOpen && (
-          <section className="mua-task-panel mf-task-panel" id="canvasTasks" aria-label="画布任务" onMouseDown={(e) => e.stopPropagation()}>
+          <section className="musecanvas-task-panel mf-task-panel" id="canvasTasks" aria-label="画布任务" onMouseDown={(e) => e.stopPropagation()}>
             <header><h2>画布任务</h2><button type="button" aria-label="关闭任务面板" onClick={() => setActivityOpen(false)}><X size={17} /></button></header>
             {doc.nodes.some((node) => node.jobId) ? (
               <ul>

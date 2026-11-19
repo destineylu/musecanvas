@@ -1,9 +1,9 @@
 {
-  "name": "museapi-video-server",
+  "name": "musecanvas-server",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Mua 图片与视频创作平台后端：账号池、积分、任务编排、作品库",
+  "description": "musecanvas 图片与视频创作平台后端：账号池、积分、任务编排、作品库",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
