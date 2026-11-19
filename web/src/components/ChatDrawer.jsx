@@ -25,6 +25,12 @@ export default function ChatDrawer({ canvasId, canvasName, documentAttachments, 
   const toast = useToast();
   const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [modelName,setModelName]=useState('Muse');
+  useEffect(()=>{
+    if(!open)return;let active=true;
+    api.models().then(c=>{if(active)setModelName(c.providers.find(p=>p.id===c.defaults.chat)?.name||'Muse');}).catch(()=>{});
+    return()=>{active=false;};
+  },[open]);
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -155,7 +161,7 @@ export default function ChatDrawer({ canvasId, canvasName, documentAttachments, 
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand-500/10 text-brand-600"><Bot size={17} /></span>
           <div className="min-w-0">
-            <h2 className="text-[14px] font-semibold text-[#171a24]">Muse 对话</h2>
+            <h2 className="text-[14px] font-semibold text-[#171a24]">{modelName} 对话</h2>
             <p className="truncate text-[11px] text-mist-400">{canvasName || '当前画布'} · 对话按画布保存</p>
           </div>
         </div>
@@ -204,7 +210,7 @@ export default function ChatDrawer({ canvasId, canvasName, documentAttachments, 
             </article>
           );
         })}
-        {busy && <div className="flex items-center gap-2 pl-9 text-[11.5px] text-mist-400"><Loader2 size={13} className="animate-spin text-brand-500" />Muse 正在思考…</div>}
+        {busy && <div className="flex items-center gap-2 pl-9 text-[11.5px] text-mist-400"><Loader2 size={13} className="animate-spin text-brand-500" />{modelName} 正在思考…</div>}
       </div>
 
       <div className="shrink-0 border-t border-[#edf0f6] bg-white p-3">

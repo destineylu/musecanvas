@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { requireAuth } from '../auth.js';
+import { selectedModel } from '../model-config.js';
 import { CFG, usesMuse2api } from '../config.js';
 import { db, now } from '../db.js';
 import { completeText, textModel } from '../museText.js';
@@ -54,7 +55,7 @@ function attachmentDataUrl(userId, url, required) {
   const file = db.prepare('SELECT filename, mime, bytes FROM uploads WHERE user_id = ? AND filename = ?')
     .get(userId, match[1]);
   if (!file) throw Object.assign(new Error('找不到此附件或当前账号无权读取'), { status: 403 });
-  if (!file.mime.startsWith('image/') && !(usesMuse2api && ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.mime))) {
+  if (!file.mime.startsWith('image/') && !(!selectedModel('chat') && usesMuse2api && ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.mime))) {
     if (!required) return null;
     throw Object.assign(new Error('API Bridge 对话支持图片和纯文本附件，请将 PDF 或 Word 内容转换为文本'), { status: 400 });
   }

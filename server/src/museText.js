@@ -1,10 +1,14 @@
 import { CFG, usesMuse2api } from './config.js';
 import { complete as completeBridge } from './muse.js';
 import { complete as completeLegacy } from './muse2api.js';
+import { selectedModel } from './model-config.js';
+import { externalText } from './external-models.js';
 
-export const textModel = () => usesMuse2api ? 'muse-spark' : CFG.bridgeModels.chat;
+export const textModel = () => selectedModel('chat')?.model || (usesMuse2api ? 'muse-spark' : CFG.bridgeModels.chat);
 
 export function completeText(messages) {
+  const external = selectedModel('chat');
+  if (external) return externalText(external, messages);
   if (!usesMuse2api) return completeBridge(textModel(), messages);
   const attachments = new Set();
   const textMessages = messages.map(message => {

@@ -3,6 +3,8 @@ import { pendingJobs, updateJob, addCredits, getJob, db, createJob } from './db.
 import { downloadMedia, generateMedia } from './muse.js';
 import { referenceImage } from './mediaRefs.js';
 import * as legacy from './muse2api.js';
+import { selectedModel, modelById } from './model-config.js';
+import { submitExternal, pollExternal, externalResult, saveExternalResult } from './external-models.js';
 
 const inflight = new Set();
 
@@ -18,14 +20,17 @@ function transaction(work) {
   }
 }
 
-function createQueuedJob(userId, type, prompt, params, workspace = {}) {
+export function createQueuedJob(userId, type, prompt, params, workspace = {}) {
   // 本机部署不计积分：生成任务不检查、不扣除积分，失败也无需退还。
   const cost = 0;
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) {
     throw Object.assign(new Error('账号不存在'), { status: 401 });
   }
-  const job = createJob(userId, type, prompt, params, cost);
-  updateJob(job.id, { upstream_id: usesMuse2api ? 'muse2api:queued' : 'bridge:queued', project_id: workspace.projectId, canvas_id: workspace.canvasId });
+  const provider = workspace.binding ? (workspace.binding.providerId ? modelById(workspace.binding.providerId) : null) : selectedModel(type);
+  if (workspace.binding?.providerId && (!provider || provider.revision !== workspace.binding.revision)) throw new Error('流程使用的模型配置已修改，请重新创建流程');
+  const bound = provider ? { ...params, providerId: provider.id, providerRevision: provider.revision, model: provider.model, modelName: provider.name } : params;
+  const job = createJob(userId, type, prompt, bound, cost);
+  updateJob(job.id, { upstream_id: provider ? 'external:queued' : (workspace.binding ? workspace.binding.mode === 'muse2api' : usesMuse2api) ? 'muse2api:queued' : 'bridge:queued', project_id: workspace.projectId, canvas_id: workspace.canvasId });
   return getJob(job.id);
 }
 
@@ -131,12 +136,52 @@ async function runLegacyJob(job) {
   }
 }
 
-const runJob = job => job.upstreamId?.startsWith('bridge:') ? runBridgeJob(job) : runLegacyJob(job);
+async function runExternalJob(job) {
+  inflight.add(job.id);
+  try {
+    const p = modelById(job.params.providerId);
+    if (!p || p.revision !== job.params.providerRevision) throw new Error('此任务的模型配置已更改或删除，请核对后重新提交');
+    let data, taskId = job.result?.taskId;
+    if (job.upstreamId === 'external:queued') {
+      const refs = (job.params.images || []).map(item => referenceImage(job.userId, item));
+      if (refs.length > p.maxReferences) throw new Error('参考图数量超出模型配置上限');
+      updateJob(job.id, { upstream_id: 'external:submitting', status: 'processing', progress: 10 });
+      data = await submitExternal(p, job, refs);
+      taskId = data.id || data.task_id || data.data?.id;
+      if (taskId) updateJob(job.id, { upstream_id: 'external:polling', result: JSON.stringify({taskId, submittedAt:Date.now()}) });
+    } else if (job.upstreamId === 'external:polling' && taskId) {
+      if (Date.now() - (job.result.submittedAt || job.createdAt) > 30 * 60000) throw new Error('外部模型任务超过 30 分钟，请到供应商核对任务');
+      data = await pollExternal(p, taskId);
+    } else throw new Error('提交时程序中断，结果未知，请到供应商核对任务后再重试');
+    const status = String(data.status || data.data?.status || '').toLowerCase();
+    if (['failed','error','cancelled','canceled'].includes(status)) throw new Error('供应商任务生成失败，请在供应商控制台查看详情');
+    const result = externalResult(data);
+    if (!result.url && !result.b64 && !['completed','succeeded','success','done'].includes(status)) {
+      if (!taskId) throw new Error('供应商既未返回媒体，也未返回任务 ID');
+      updateJob(job.id, { progress: Math.max(15, Math.min(80, Number(data.progress) || 15)) });
+      return;
+    }
+    const {fileName,bytes} = await saveExternalResult(p, job, data, taskId);
+    updateJob(job.id, {status:'completed',progress:100,media_file:fileName,error:null,result:JSON.stringify({localUrl:'/media/'+fileName,bytes,taskId}),finished_at:Date.now()});
+  } catch(e) { failJob(job.id,e.message); }
+  finally { inflight.delete(job.id); }
+}
+const runJob = job => job.upstreamId?.startsWith('external:') ? runExternalJob(job) : job.upstreamId?.startsWith('bridge:') ? runBridgeJob(job) : runLegacyJob(job);
 
 function dispatch() {
   const free = CFG.bridgeConcurrency - inflight.size;
   if (free <= 0) return;
-  for (const job of pendingJobs().filter(item => item.upstreamId && item.phase !== 'paused' && !inflight.has(item.id)).slice(0, free)) {
+  let slots = free;
+  for (const job of pendingJobs().filter(item => item.upstreamId && item.phase !== 'paused' && !inflight.has(item.id))) {
+    if (slots <= 0) break;
+    if (['external:queued','muse2api:queued','bridge:queued'].includes(job.upstreamId) && pendingJobs().filter(j=>j.status==='processing').length >= CFG.bridgeConcurrency) continue;
+    if (job.upstreamId.startsWith('external:')) {
+      const p = modelById(job.params.providerId);
+      const active = [...inflight].map(id=>getJob(id)).filter(j=>j?.params.providerId===job.params.providerId).length;
+      if (p && active >= p.maxConcurrency) continue;
+      if (p && job.upstreamId === 'external:queued' && pendingJobs().filter(j=>j.params.providerId===p.id && j.status==='processing').length >= p.maxConcurrency) continue;
+    }
+    slots--;
     runJob(job).catch(error => console.error('[worker]', job.id, error.message));
   }
 }

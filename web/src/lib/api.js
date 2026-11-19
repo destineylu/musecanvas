@@ -29,6 +29,15 @@ export async function request(path, { method = 'GET', body, form } = {}) {
 }
 
 export const api = {
+  models: () => request('/api/models'),
+  modelConfig: () => request('/api/models/config'),
+  saveModel: (id,body) => request('/api/models'+(id?'/'+encodeURIComponent(id):''),{method:id?'PUT':'POST',body}),
+  modelDefaults: body => request('/api/models/defaults',{method:'PUT',body}),
+  deleteModel: id => request('/api/models/'+encodeURIComponent(id),{method:'DELETE'}),
+  testModel: id => request('/api/models/'+encodeURIComponent(id)+'/test',{method:'POST',body:{}}),
+  workflowRun: id => request('/api/workbench/'+encodeURIComponent(id)+'/run'),
+  startWorkflow: (id,limit) => request('/api/workbench/'+encodeURIComponent(id)+'/run',{method:'POST',body:{limit}}),
+  controlWorkflow: (id,action) => request('/api/workbench/'+encodeURIComponent(id)+'/run',{method:'PUT',body:{action}}),
   library: query => request('/api/library?'+new URLSearchParams(query)),
   updateAsset: body => request('/api/library/item', {method:'PUT',body}),
   canvasVersions: id => request('/api/workbench/'+encodeURIComponent(id)+'/versions'),

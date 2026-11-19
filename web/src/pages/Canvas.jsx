@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Type, Image as ImageIcon, Video, Trash2, ZoomIn, ZoomOut, Maximize, Loader2, Sparkles,
-  MousePointer2, Map as MapIcon, Expand, Upload, Send, X, ListChecks, Crosshair, MessageSquare, Settings, Hand, Link2, CircleHelp, Clapperboard, GripVertical, FolderOpen, History, BookOpen, LayoutGrid,
+  MousePointer2, Map as MapIcon, Expand, Upload, Send, X, ListChecks, Crosshair, MessageSquare, Settings, Hand, Link2, CircleHelp, Clapperboard, GripVertical, FolderOpen, History, BookOpen, LayoutGrid, Play, Pause, Square,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -179,6 +179,19 @@ export default function Canvas() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [upstream, setUpstream] = useState(null);
+  const [modelConfig, setModelConfig] = useState(null);
+  const [flow, setFlow] = useState(null);
+  const [flowBusy, setFlowBusy] = useState(false);
+  const [flowLimit, setFlowLimit] = useState(2);
+  const flowActive = flow && ['running','paused'].includes(flow.status);
+  useEffect(() => {
+    let active=true;
+    const sync=()=>api.models().then(data=>{if(active)setModelConfig(data);}).catch(()=>{});
+    sync(); window.addEventListener('focus',sync); window.addEventListener('muse-models-changed',sync);
+    return()=>{active=false;window.removeEventListener('focus',sync);window.removeEventListener('muse-models-changed',sync);};
+  },[]);
+  const chosenModel = kind => modelConfig?.providers.find(p=>p.id===modelConfig.defaults[kind]);
+
   useEffect(() => {
     let active = true;
     const sync = () => api.upstream().then(data => { if (active) setUpstream(data); }).catch(() => {});
@@ -264,6 +277,42 @@ export default function Canvas() {
     }, 400);
     return () => clearTimeout(t);
   }, [canvasId, canvasInfo, canvasLoaded, doc, view, toast]);
+
+  const applyFlow = useCallback(run => {
+    setFlow(run);
+    if(!run)return;
+    const steps=new Map(run.steps.map(s=>[s.nodeId,s]));
+    setDoc(current=>{
+      let changed=false;
+      const nodes=current.nodes.map(n=>{
+        const step=steps.get(n.id);
+        if(!step||['waiting','cancelled'].includes(step.state))return n;
+        const patch={jobId:step.jobId,status:step.state==='done'?'done':step.state==='running'?'running':'failed',error:step.error||null,...(step.mediaUrl?{mediaUrl:step.mediaUrl}: {})};
+        if(Object.entries(patch).every(([k,v])=>n[k]===v))return n;
+        changed=true;return {...n,...patch};
+      });
+      return changed?{...current,nodes}:current;
+    });
+  },[]);
+  useEffect(()=>{
+    if(!canvasInfo?.id)return;
+    let active=true,checking=false;
+    const poll=async()=>{if(checking)return;checking=true;try{const {run}=await api.workflowRun(canvasInfo.id);if(active)applyFlow(run);}catch{}finally{checking=false;}};
+    poll();const timer=setInterval(poll,2500);
+    return()=>{active=false;clearInterval(timer);};
+  },[canvasInfo?.id,applyFlow]);
+  const startFlow=async()=>{
+    if(flowBusy||busy)return;
+    setFlowBusy(true);
+    try{
+      await api.saveCanvas(canvasInfo.id,{document:{...docRef.current,view:viewRef.current}});
+      const {run}=await api.startWorkflow(canvasInfo.id,flowLimit);applyFlow(run);
+      toast('流程已启动：按依赖生成，已完成素材会保留');
+    }catch(e){toast(e.message,'error');}finally{setFlowBusy(false);}
+  };
+  const controlFlow=async action=>{
+    setFlowBusy(true);try{applyFlow((await api.controlWorkflow(canvasInfo.id,action)).run);}catch(e){toast(e.message,'error');}finally{setFlowBusy(false);}
+  };
 
   const screenToCanvas = (clientX, clientY) => {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -842,10 +891,12 @@ export default function Canvas() {
   const generateNode = async (nodeId) => {
     const node = doc.nodes.find((n) => n.id === nodeId);
     if (!node || !sends(node) || busy || node.status === 'running') return;
+    if (flowActive) return toast('一键流程执行中，请先停止流程再单独生成', 'error');
     const mode = node.type === 'video' ? 'video' : 'image';
     const sizes = mode === 'video' ? VIDEO_SIZES : IMAGE_SIZES;
     const size = sizes.includes(node.size) ? node.size : (mode === 'video' ? '16:9' : '1:1');
-    const duration = VIDEO_DURATIONS.includes(Number(node.duration)) ? Number(node.duration) : 5;
+    const availableDurations = chosenModel(mode)?.durations || VIDEO_DURATIONS;
+    const duration = availableDurations.includes(Number(node.duration)) ? Number(node.duration) : availableDurations[0];
     const incoming = doc.nodes.filter((n) => (doc.links || []).some((l) => l.from === n.id && l.to === nodeId));
     const missingReference=incoming.find(n=>n.type==='image'&&!n.mediaUrl);
     if(missingReference)return toast('请先生成连入的参考图「'+(missingReference.label||'图片')+'」，再生成当前节点','error');
@@ -860,8 +911,8 @@ export default function Canvas() {
       }
     }
 
-    const maxReferences = upstream?.maxReferences;
-    if (maxReferences && images.length > maxReferences) return toast('当前接入方式最多支持 ' + maxReferences + ' 张参考图', 'error');
+    const maxReferences = chosenModel(mode)?.maxReferences ?? upstream?.maxReferences;
+    if (maxReferences !== undefined && images.length > maxReferences) return toast('当前接入方式最多支持 ' + maxReferences + ' 张参考图', 'error');
     setBusy(true);
     try {
       await checkpoint('生成前备份');
@@ -1342,6 +1393,8 @@ export default function Canvas() {
         {showComposer && (
           <Composer
             node={focused}
+            modelName={chosenModel(focused.type)?.name}
+            durations={chosenModel(focused.type)?.durations || VIDEO_DURATIONS}
             incoming={focusedIncoming}
             style={composerStyle}
             busy={busy}
@@ -1386,10 +1439,16 @@ export default function Canvas() {
             </span>
           </div>
           <div className="mf-pill mf-actions">
+            {flow&&!flowActive&&<span className="px-2 text-xs text-mist-300" title={flow.steps.find(s=>s.error)?.error||'流程执行结果'}>{flow.status==='completed'?'流程完成':flow.status==='stopped'?'流程已停止':'流程部分失败'} · {flow.steps.filter(s=>s.state==='done').length}/{flow.steps.length}{flow.steps.some(s=>s.state==='failed'||s.state==='blocked')?' · 请检查失败节点':''}</span>}
             <button type="button" className="mf-pill-btn" aria-label="素材库" onClick={()=>setWorkbench('library')}><FolderOpen size={15}/><span className="muse-action-label">素材库</span></button>
             <button type="button" className="mf-pill-btn" aria-label="生成历史与版本" onClick={()=>setWorkbench('history')}><History size={15}/><span className="muse-action-label">历史</span></button>
             <button type="button" className="mf-pill-btn" aria-label="AI 搭建画布" onClick={()=>setWorkbench('ai')}><Sparkles size={15}/><span className="muse-action-label">AI 搭建</span></button>
             <button type="button" className="mf-pill-btn" aria-label="分镜表" onClick={()=>setWorkbench('storyboard')}><BookOpen size={15}/><span className="muse-action-label">分镜表</span></button>
+            {!flowActive ? <><label className="mf-select" title="一键生成并发上限"><select aria-label="流程并发上限" value={flowLimit} onChange={e=>setFlowLimit(Number(e.target.value))}>{[1,2,3].map(n=><option key={n} value={n}>并发 {n}</option>)}</select></label><button type="button" className="mf-pill-btn" disabled={flowBusy||busy||runningCount>0} aria-label="一键生成" onClick={startFlow}><Play size={15}/><span>一键生成</span></button></> : <>
+              <span className="px-1 text-xs">{flow.status==='paused'?'已暂停':'执行中'} {flow.steps.filter(s=>s.state==='done').length}/{flow.steps.length}</span>
+              <button className="mf-pill-btn" disabled={flowBusy} aria-label={flow.status==='paused'?'继续流程':'暂停流程'} onClick={()=>controlFlow(flow.status==='paused'?'resume':'pause')}>{flow.status==='paused'?<Play size={15}/>:<Pause size={15}/>}</button>
+              <button className="mf-pill-btn" disabled={flowBusy} aria-label="停止流程" title="停止后续任务，已提交任务继续完成" onClick={()=>controlFlow('stop')}><Square size={15}/></button>
+            </>}
             <button type="button" className="mf-pill-btn" aria-label="自动整理画布" onClick={autoArrange}><LayoutGrid size={15}/><span className="muse-action-label">整理</span></button>
             <button type="button" className={clsx('mf-pill-btn', activityOpen && 'is-on')} aria-label="画布任务" aria-expanded={activityOpen}
               aria-controls={activityOpen ? 'canvasTasks' : undefined} onClick={() => setActivityOpen((open) => !open)}>
@@ -1573,11 +1632,11 @@ function ToolBtn({ icon: Icon, onClick, active, disabled, danger, title, label }
 }
 
 /** 选中生成节点时贴在节点下方的提示词编辑器。 */
-function Composer({ node, incoming, style, busy, onPatch, onSend }) {
+function Composer({ node, modelName, durations, incoming, style, busy, onPatch, onSend }) {
   const isVideo = node.type === 'video';
   const sizes = isVideo ? VIDEO_SIZES : IMAGE_SIZES;
   const size = sizes.includes(node.size) ? node.size : (isVideo ? '16:9' : '1:1');
-  const duration = VIDEO_DURATIONS.includes(Number(node.duration)) ? Number(node.duration) : 5;
+  const duration = durations.includes(Number(node.duration)) ? Number(node.duration) : durations[0];
   const running = node.status === 'running';
   const texts = incoming.filter((n) => n.type === 'text' && n.text?.trim());
   const refs = node.refImage ? [{ id: 'ref', mediaUrl: node.refImage }] : incoming.filter((n) => n.type === 'image' && n.mediaUrl);
@@ -1598,16 +1657,16 @@ function Composer({ node, incoming, style, busy, onPatch, onSend }) {
         rows={3}
       />
       <div className="mf-composer-bar">
-        <span className="mf-model"><Sparkles size={14} /> Muse {isVideo ? '视频' : '图片'}</span>
+        <span className="mf-model"><Sparkles size={14} /> {modelName || ('Muse '+(isVideo ? '视频' : '图片'))}</span>
         <label className="mf-select" title="画面比例">
           <select value={size} onChange={(e) => onPatch({ size: e.target.value })}>
             {sizes.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
         </label>
         {isVideo && (
-          <label className="mf-select" title="时长，最高 10 秒">
+          <label className="mf-select" title="视频时长">
             <select value={duration} onChange={(e) => onPatch({ duration: Number(e.target.value) })}>
-              {VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d} 秒</option>)}
+              {durations.map((d) => <option key={d} value={d}>{d} 秒</option>)}
             </select>
           </label>
         )}

@@ -26,6 +26,9 @@ import chatRoutes from './routes/chat.js';
 import directorRoutes from './routes/director.js';
 import projectRoutes from './routes/projects.js';
 import workbenchRoutes from './routes/workbench.js';
+import modelRoutes from './routes/models.js';
+import workflowRunRoutes from './routes/workflow-runs.js';
+import { startWorkflowRunner } from './workflow-runner.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -67,6 +70,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/bridges', bridgeRoutes);
 app.use('/api/muse2api', muse2apiRoutes);
 app.use('/api/upstream', upstreamRoutes);
+app.use('/api/models', modelRoutes);
 app.get(['/api/bridge/status', '/api/upstream/status'], requireAuth, async (_req, res) => {
   try {
     if (usesMuse2api) {
@@ -91,6 +95,7 @@ app.use('/api', chatRoutes);
 app.use('/api', directorRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api', workbenchRoutes);
+app.use('/api', workflowRunRoutes);
 app.use('/api', genRoutes);
 
 // OpenAI 兼容对外接口（用 sk- 密钥鉴权，转发到上游）
@@ -142,6 +147,7 @@ function bootstrap() {
 bootstrap();
 startBridgePool();
 startWorker();
+startWorkflowRunner();
 
 app.listen(CFG.port, CFG.host, () => {
   console.log(`[server] 平台后端已启动 http://${CFG.host}:${CFG.port}`);

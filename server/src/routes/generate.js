@@ -9,6 +9,7 @@ import {
 } from '../db.js';
 import { enqueueJob } from '../worker.js';
 import { referenceImage } from '../mediaRefs.js';
+import { selectedModel } from '../model-config.js';
 
 const r = Router();
 
@@ -81,9 +82,11 @@ function submit(kind, req, res) {
   }
   const workspace = resolveWorkspace(req);
   if (workspace.error) return res.status(404).json({ error: workspace.error });
+  if (workspace.canvasId && db.prepare("SELECT 1 FROM workflow_runs WHERE canvas_id=? AND status IN ('running','paused')").get(workspace.canvasId)) return res.status(409).json({error:'一键流程执行中，请先停止流程再单独生成'});
 
   try {
-    const maxReferences = usesMuse2api ? 3 : 1;
+    const provider = selectedModel(kind);
+    const maxReferences = provider ? provider.maxReferences : usesMuse2api ? 3 : 1;
     if (!Array.isArray(images) || images.length > maxReferences) {
       return res.status(400).json({ error: '当前接入方式每个媒体任务最多支持 ' + maxReferences + ' 张参考图' });
     }
@@ -96,7 +99,8 @@ function submit(kind, req, res) {
       sourceNodeId: typeof req.body.sourceNodeId === 'string' ? req.body.sourceNodeId.slice(0,100) : null,
     };
     if (video) {
-      params.duration = CFG.videoDurations.includes(Number(duration)) ? Number(duration) : 5;
+      const durations = provider?.durations || CFG.videoDurations;
+      params.duration = durations.includes(Number(duration)) ? Number(duration) : durations[0];
       if (typeof extra === 'string' && extra.trim()) params.extra = extra.trim().slice(0, 500);
     }
     const job = enqueueJob(req.user.id, kind, prompt.trim(), params, workspace);

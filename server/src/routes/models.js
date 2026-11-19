@@ -1,0 +1,15 @@
+import { Router } from 'express';
+import { requireAuth, requireAdmin } from '../auth.js';
+import { publicModels, saveModel, deleteModel, setDefaults, modelById } from '../model-config.js';
+import { testModel } from '../external-models.js';
+const r = Router();
+r.use(requireAuth);
+r.get('/', (_req,res) => { const {defaults,providers}=publicModels(); res.json({defaults,providers:providers.map(({id,name,kind,model,maxReferences,durations})=>({id,name,kind,model,maxReferences,durations}))}); });
+r.use(requireAdmin);
+r.get('/config', (_req,res) => res.json(publicModels()));
+r.put('/defaults', (req,res,next) => { try { res.json(setDefaults(req.body || {})); } catch(e) { next(e); } });
+r.post('/', (req,res,next) => { try { res.json(saveModel(null,req.body || {})); } catch(e) { next(e); } });
+r.put('/:id', (req,res,next) => { try { res.json(saveModel(req.params.id,req.body || {})); } catch(e) { next(e); } });
+r.delete('/:id', (req,res,next) => { try { res.json(deleteModel(req.params.id)); } catch(e) { next(e); } });
+r.post('/:id/test', async(req,res,next) => { try { const p=modelById(req.params.id); if(!p)return res.status(404).json({error:'模型不存在'});res.json(await testModel(p)); } catch(e) { next(e); } });
+export default r;

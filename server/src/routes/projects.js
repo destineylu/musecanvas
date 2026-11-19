@@ -236,6 +236,21 @@ r.patch('/canvases/:canvasId', requireAuth, (req, res) => {
     catch (error) { return res.status(400).json({ error: error.message }); }
   }
   if (documentJson !== canvas.document_json) {
+    // Late browser autosaves must not erase execution updates written by the runner.
+    const latestRun=db.prepare('SELECT status,data FROM workflow_runs WHERE canvas_id=? AND user_id=? ORDER BY updated_at DESC,rowid DESC LIMIT 1').get(canvas.id,req.user.id);
+    if(latestRun){
+      const before=JSON.parse(canvas.document_json),after=JSON.parse(documentJson);
+      const steps=new Map(JSON.parse(latestRun.data).steps.map(s=>[s.nodeId,s]));
+      after.nodes=after.nodes.map(n=>{
+        const step=steps.get(n.id),current=before.nodes.find(x=>x.id===n.id);
+        if(!step?.jobId||!current||current.jobId!==step.jobId)return n;
+        const busy=['running','paused'].includes(latestRun.status)||step.state==='running';
+        const stale=n.jobId===current.jobId&&n.status==='running'&&current.status!=='running';
+        if(!busy&&!stale)return n;
+        const copy={...n};for(const k of ['jobId','status','phase','progress','mediaUrl','error'])if(k in current)copy[k]=current[k];return copy;
+      });
+      documentJson=JSON.stringify(after);
+    }
     const before=JSON.parse(canvas.document_json),after=JSON.parse(documentJson);
     const significant=before.nodes.some(n=>!after.nodes.some(a=>a.id===n.id)||after.nodes.some(a=>a.id===n.id&&a.mediaUrl!==n.mediaUrl));
     snapshot(canvas.id,req.user.id,canvas.document_json,significant?'节点或生成结果变更前':'自动保存前',significant);
