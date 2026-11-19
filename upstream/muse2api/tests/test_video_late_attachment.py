@@ -74,6 +74,8 @@ def cases(source):
     result["claim_no_attachment"] = scenario(source, cn, ready_at=None, timeout=45)
     result["claim_only_cover"] = scenario(source, cn, ready_at=None, timeout=45, cover=True)
     result["stop_lifecycle"] = scenario(source, cn, ready_at=30, stop_until=20)
+    result["cn_fresh_30"] = scenario(source, "已从零生成，全新图片，9:16 竖屏，无参考图。", ready_at=30)
+    result["fresh_claim_no_attachment"] = scenario(source, "已从零生成，全新图片。", ready_at=None, timeout=45)
     refusal = "视频没生成成功：你这个账号所在的国家/地区目前不支持视频生成。"
     result["explicit_refusal"] = scenario(source, refusal)
     result["claim_then_refusal"] = scenario(source, cn, later_text=(12, refusal))
@@ -106,10 +108,10 @@ def main():
     source = ROOT / "engine.py"
     result = cases(source)
     for name, item in result.items():
-        if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "en_claim_", "en_ready_", "verified_report_")):
+        if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "cn_fresh_", "en_claim_", "en_ready_", "verified_report_")):
             assert item["outcome"] == "video", (name, item)
             assert item["elapsed"] >= int(name.rsplit("_", 1)[1]), (name, item)
-        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment"):
+        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment", "fresh_claim_no_attachment"):
             assert item["outcome"] == "timeout" and 45 <= item["elapsed"] < 46, (name, item)
         elif name in ("ack_then_attachment", "ack_en_then_attachment"):
             assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)

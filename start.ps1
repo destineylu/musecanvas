@@ -77,6 +77,10 @@ function Read-Setting($name, $fallback) {
   return $fallback
 }
 
+$listenPort = 0
+if (-not [int]::TryParse((Read-Setting 'PORT' '8787'), [ref]$listenPort) -or $listenPort -lt 1024 -or $listenPort -gt 65535) { throw 'PORT 必须为 1024–65535' }
+$localBase = "http://127.0.0.1:$listenPort"
+
 $upstreamDataDir = Read-Setting 'DATA_DIR' (Join-Path $server 'data')
 $upstreamChoiceFile = Join-Path $upstreamDataDir 'upstream.json'
 $upstreamChoice = if (Test-Path -LiteralPath $upstreamChoiceFile) { Get-Content -Raw -LiteralPath $upstreamChoiceFile | ConvertFrom-Json } else { $null }
@@ -118,14 +122,14 @@ if ($mode -eq 'bridge') {
 }
 
 # ---------- 5. 平台后端 ----------
-if (Test-Port 8787) {
-  $current = & curl.exe --noproxy '*' --silent --fail --max-time 3 'http://127.0.0.1:8787/api/health' | ConvertFrom-Json
+if (Test-Port $listenPort) {
+  $current = & curl.exe --noproxy '*' --silent --fail --max-time 3 "$localBase/api/health" | ConvertFrom-Json
   if ($current.service -ne 'musecanvas' -or $current.upstream -ne $url -or $current.upstreamMode -ne $mode) {
-    throw '8787 上的服务配置不同，请先停止该服务再启动 musecanvas。'
+    throw "$listenPort 上的服务配置不同，请先停止该服务再启动 musecanvas。"
   }
-  Write-Host "平台后端已在运行 (8787)" -ForegroundColor DarkGray
+  Write-Host "平台后端已在运行 ($listenPort)" -ForegroundColor DarkGray
 } else {
-  Write-Host "启动平台后端 (8787)…" -ForegroundColor Yellow
+  Write-Host "启动平台后端 ($listenPort)…" -ForegroundColor Yellow
   $nodeExe = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
   $previousMode = $env:MUSECANVAS_UPSTREAM
   $previousOverride = $env:MUSECANVAS_UPSTREAM_OVERRIDE
@@ -137,7 +141,7 @@ if (Test-Port 8787) {
     $env:MUSECANVAS_UPSTREAM = $previousMode
     $env:MUSECANVAS_UPSTREAM_OVERRIDE = $previousOverride
   }
-  if ($ok -and (Wait-Http 'http://127.0.0.1:8787/api/health' 30)) {
+  if ($ok -and (Wait-Http "$localBase/api/health" 30)) {
     Write-Host "  平台就绪" -ForegroundColor Green
   } else {
     throw "平台启动失败，看 server\server.err.log"
@@ -158,7 +162,7 @@ if ($Dev) {
 
 Write-Host ""
 Write-Host "---------------------------------------------" -ForegroundColor Cyan
-Write-Host " 平台入口   http://127.0.0.1:8787" -ForegroundColor White
+Write-Host " 平台入口   $localBase" -ForegroundColor White
 if ($Dev) { Write-Host " 前端调试   http://127.0.0.1:5173" -ForegroundColor White }
 Write-Host " 上游模式   $mode  $url" -ForegroundColor DarkGray
 Write-Host " 管理员凭据由 server\.env 配置" -ForegroundColor DarkGray

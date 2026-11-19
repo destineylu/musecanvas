@@ -1407,6 +1407,7 @@ class MuseEngine:
             return False
         return bool(re.search(
             r"\.(?:webp|png|jpe?g|mp4|webm)|imagine_media|deliverable|"
+            r"已(?:经)?(?:从零|重新|全新)(?:成功)?生成|"
             r"generated\s+.*image|verified\s+generated|artifact|"
             r"^(?:已(?:经)?(?:成功)?生成|生成好了|生成完毕|已完成|做好了)(?:[，。！\s]|$)|"
             r"(?:视频|影片|短片|图片|图像)[^。！？!?\n]{0,40}"
