@@ -84,7 +84,9 @@ async function runLegacyJob(job) {
     if (job.upstreamId === 'muse2api:queued') {
       const images = (job.params.images || []).map(item => ({ url: referenceImage(job.userId, item) }));
       const video = job.type === 'video';
-      const payload = { prompt: job.prompt, model: video ? 'muse-video' : 'muse-image', size: job.params.size };
+      const executionSeconds = video ? CFG.museVideoSeconds : CFG.museImageSeconds;
+      const pollTimeoutMs = (CFG.museQueueSeconds + executionSeconds + 120) * 1000;
+      const payload = { prompt: job.prompt, model: video ? 'muse-video' : 'muse-image', size: job.params.size, timeout: executionSeconds };
       if (video) {
         payload.duration = job.params.duration;
         if (job.params.extra) payload.extra = job.params.extra;
@@ -94,7 +96,7 @@ async function runLegacyJob(job) {
       const task = await (video ? legacy.createVideo(payload) : legacy.createImageTask(payload));
       const id = task?.id || task?.task_id;
       if (!id) throw new Error('muse2api 未返回任务 ID');
-      updateJob(job.id, { upstream_id: 'muse2api:id:' + id, result: JSON.stringify({ submittedAt: Date.now() }) });
+      updateJob(job.id, { upstream_id: 'muse2api:id:' + id, result: JSON.stringify({ submittedAt: Date.now(), pollTimeoutMs }) });
       return;
     }
     if (job.upstreamId === 'muse2api:submitting') {
@@ -104,14 +106,16 @@ async function runLegacyJob(job) {
       const id = job.upstreamId.replace(/^muse2api:id:/, '');
       const video = job.type === 'video';
       const submittedAt = job.result?.submittedAt || job.createdAt;
-      if (Date.now() - submittedAt > (video ? 15 : 8) * 60_000) {
-        return failJob(job.id, 'muse2api 任务超时，请重试');
-      }
+      const pollTimeoutMs = job.result?.pollTimeoutMs || (CFG.museQueueSeconds + (video ? CFG.museVideoSeconds : CFG.museImageSeconds) + 120) * 1000;
+      const waitExpired = Date.now() - submittedAt > pollTimeoutMs;
       let task;
       try {
         task = await (video ? legacy.getVideo(id) : legacy.getImageTask(id));
       } catch (error) {
-        if (!error.status || error.status === 429 || error.status >= 500) return;
+        if (!error.status || error.status === 429 || error.status >= 500) {
+          if (waitExpired) return failJob(job.id, 'muse2api 任务查询超过等待上限，请核对上游任务；不会自动重新提交');
+          return;
+        }
         throw error;
       }
       const state = String(task.status || '').toLowerCase();
@@ -120,6 +124,7 @@ async function runLegacyJob(job) {
       }
       account = task.account || account;
       if (!['completed', 'succeeded', 'success', 'done'].includes(state)) {
+        if (waitExpired) return failJob(job.id, 'muse2api 排队及生成超过等待上限，请核对上游任务；不会自动重新提交');
         updateJob(job.id, { status: 'processing', progress: Math.max(Number(task.progress) || 0, job.progress), account_id: account });
         return;
       }

@@ -42,7 +42,7 @@ if (-not (Test-Path -LiteralPath $serverEnv)) {
     [IO.File]::WriteAllText($engineEnv, (@(
       "MUSE2API_KEY=$key", 'MUSE2API_HOST=127.0.0.1', "MUSE2API_PORT=$enginePort",
       "MUSE2API_CDP_PORT=$debugPort", ('MUSE2API_PROFILE_ROOT=' + (Join-Path $root 'upstream\muse2api\profiles')),
-      'MUSE2API_CONCURRENCY=1', 'MUSE2API_IMAGE_TIMEOUT=600', 'MUSE2API_VIDEO_TIMEOUT=600'
+      'MUSE2API_CONCURRENCY=1', 'MUSE2API_IMAGE_TIMEOUT=1800', 'MUSE2API_VIDEO_TIMEOUT=1800', 'MUSE2API_QUEUE_TIMEOUT=1800'
     ) -join "`n") + "`n", $utf8)
   }
 }

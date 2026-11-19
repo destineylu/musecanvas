@@ -3,6 +3,8 @@ import os
 import sys
 import threading
 import time
+import tempfile
+import atexit
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,6 +13,9 @@ from unittest.mock import patch
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
+fixture_home = tempfile.TemporaryDirectory(prefix='muse-concurrency-')
+atexit.register(fixture_home.cleanup)
+os.environ.update(MUSE2API_HOME=fixture_home.name,MUSE2API_PROFILE_ROOT=fixture_home.name,MUSE2API_KEY='test-only')
 import app
 from config import Config
 from store import Store
@@ -52,7 +57,7 @@ def test_account_pool_manager():
     dummy_store = SimpleNamespace(
         accounts=dummy_accounts,
         get_account=lambda aid: next((a for a in dummy_accounts if a["id"] == aid), None),
-        pick_account=lambda preferred_id=None, rotate=True, force_rotate=False, exclude_ids=None, record_use=True: next(
+        pick_account=lambda preferred_id=None, rotate=True, force_rotate=False, exclude_ids=None, record_use=True, generation_only=False: next(
             (a for a in dummy_accounts if a["id"] not in (exclude_ids or set())), None
         )
     )

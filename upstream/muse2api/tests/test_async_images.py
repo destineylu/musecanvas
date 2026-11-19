@@ -113,7 +113,7 @@ async def check(source, home):
         real_lock = module.GEN_LOCK
         class BusyLock:
             def acquire(self, timeout):
-                assert timeout == 1
+                assert timeout == module.CFG.queue_timeout
                 return False
         module.GEN_LOCK = BusyLock()
         try:

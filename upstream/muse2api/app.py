@@ -505,7 +505,7 @@ class ImageRequest(BaseModel):
     size: str | None = None
     aspect_ratio: str | None = None
     response_format: str = "url"      # url | b64_json
-    timeout: int | None = Field(default=None, ge=1, le=600)
+    timeout: int | None = Field(default=None, ge=1, le=1800)
     extra: str | None = None
     image: Any = None
     images: list | None = None
@@ -1156,18 +1156,15 @@ def _run_generation(prompt: str, kind: str, timeout: int,
                     reference_images: list[str] | None = None,
                     on_acquired=None) -> tuple[dict, str | None]:
     # Browser ownership covers account selection, retry and cleanup, not just generate().
-    deadline = time.monotonic() + max(1, timeout)
-    if not GEN_LOCK.acquire(timeout=max(1, timeout)):
+    queue_timeout = getattr(CFG, "queue_timeout", 1800)
+    queue_deadline = time.monotonic() + queue_timeout
+    if not GEN_LOCK.acquire(timeout=queue_timeout):
         raise MuseGenerationError("等待浏览器队列超时，请稍后重试")
     try:
-        if on_acquired:
-            try:
-                on_acquired()
-            except Exception:
-                pass
         return _run_generation_locked(prompt, kind, timeout, account_id,
                                       on_progress, reference_image, reference_images,
-                                      deadline=deadline)
+                                      deadline=time.monotonic() + max(1, timeout),
+                                      queue_deadline=queue_deadline, on_acquired=on_acquired)
     finally:
         GEN_LOCK.release()
 
@@ -1176,15 +1173,24 @@ def _run_generation_locked(prompt: str, kind: str, timeout: int,
                     account_id: str | None = None, on_progress=None,
                     reference_image: str | None = None,
                     reference_images: list[str] | None = None,
-                    deadline=None) -> tuple[dict, str | None]:
-    remaining_wait = int(deadline - time.monotonic()) if deadline is not None else timeout
+                    deadline=None, queue_deadline=None, on_acquired=None) -> tuple[dict, str | None]:
+    remaining_wait = (int(queue_deadline - time.monotonic()) if queue_deadline is not None
+                      else int(deadline - time.monotonic()) if deadline is not None else timeout)
     acc = ACCOUNT_POOL.acquire(account_id=account_id,
                                preferred_id=None,
                                rotate=True,
                                timeout=max(1, remaining_wait))
     cur_acc = acc
     last_exc = None
+    if queue_deadline is not None:
+        # Browser/account queue time does not consume the shared generation/retry budget.
+        deadline = time.monotonic() + max(1, timeout)
     try:
+        if on_acquired:
+            try:
+                on_acquired()
+            except Exception:
+                pass
         for attempt in range(2):
             if deadline is not None and time.monotonic() >= deadline:
                 raise MuseGenerationError("任务总等待时限已到，停止重试")

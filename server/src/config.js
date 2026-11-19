@@ -36,6 +36,9 @@ export const CFG = {
 
   museBase: museBase.href.replace(/\/$/, ''),
   museKey: (process.env.MUSE_KEY || process.env.MUSE2API_KEY || '').trim(),
+  museQueueSeconds: Math.max(1, num(process.env.MUSE_QUEUE_TIMEOUT_SECONDS, 1800)),
+  museImageSeconds: Math.min(1800, Math.max(1, num(process.env.MUSE_IMAGE_TIMEOUT_SECONDS, 1800))),
+  museVideoSeconds: Math.max(1, num(process.env.MUSE_VIDEO_TIMEOUT_SECONDS, 1800)),
   bridgeModels: {
     chat: process.env.BRIDGE_CHAT_MODEL || 'muse',
     image: process.env.BRIDGE_IMAGE_MODEL || 'muse-image',
