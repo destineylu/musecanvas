@@ -131,7 +131,7 @@ def check(root, home, observe):
     a_invalid = app.store.add_account(invalid_cookies)
     listed_invalid = next(acc for acc in app.store.list_accounts() if acc['id'] == a_invalid['id'])
     expect(listed_invalid['essential_ok'] is False, 'account without hatch_sess and hatch_vml must NOT be essential_ok')
-    
+
     # 真实测试生产 add_account API 路由返回值中的 essential_missing
     api_res = app.add_account(app.AccountRequest(cookies=invalid_cookies))
     expect(api_res['essential_missing'] == ['hatch_sess'], 'API response must report missing essential cookies')

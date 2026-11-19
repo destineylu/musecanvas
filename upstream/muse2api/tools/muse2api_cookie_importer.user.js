@@ -249,7 +249,7 @@
                   border-radius:16px; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                   box-shadow:0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(96, 165, 250, 0.25);
                   backdrop-filter:blur(16px); font-size:13px; line-height:1.4;">
-        
+
         <!-- 头部 -->
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid #1e293b;">
           <div style="display:flex; align-items:center; gap:8px;">
