@@ -17,7 +17,7 @@ const BASICS = [
   { icon: ImagePlus, title: '导入素材', desc: '把图片或视频拖进画布，或直接从剪贴板粘贴。' },
   { icon: ClipboardPaste, title: '跨画布复用', desc: '选中节点后复制，切换到其他画布再粘贴。' },
   { icon: Trash2, title: '删除节点', desc: '点击节点标题旁的「删除」，或选中后使用底部「删除」按钮。也可按 Delete；删除节点会移除相关连线，已归档素材仍保留。' },
-  { icon: Settings, title: '设置与接入方式', desc: '侧栏底部或画布右上角打开「设置」。可切换 API Bridge / muse2api，立即用于新任务并自动保存。主题支持浅色、深色和跟随系统。本机打开无需注册登录。' },
+  { icon: Settings, title: '设置与接入方式', desc: '侧栏底部或画布右上角打开「设置」。接入方式管理 Muse 的 API Bridge / muse2api，模型配置分别选择语言、图片和视频模型，主题管理外观。桌面 local 模式免登录；NAS account 模式必须登录，并提供「账号」密码设置。' },
 ];
 
 const WORKFLOWS = [
@@ -54,11 +54,21 @@ const TOOLS = [
   { icon: Clapperboard, title: '3D 导演台', desc: '用关节人偶和道具布景摆姿势，WASD 飞行取景，用时间轴做动画，导出关键帧图片或动画视频；也可让 Muse 根据描述布景和编排动作。', tint: '#f07a3a' },
 ];
 
+const HELP = [
+  {title:'日常启动与更新',steps:['Windows 本机：在 F:\\程序\\Mua 打开 PowerShell，执行 .\\start.ps1，再访问 http://127.0.0.1:8787/。更新代码后执行 .\\start.ps1 -Build 构建前端；后端代码更新需在没有生成任务时先 .\\stop.ps1，再 .\\start.ps1。NAS 容器按部署说明更新，不使用 Windows 脚本。','服务启动完成后刷新页面；Ctrl+F5 可以重新加载前端资源。点击「重新连接」只重新检查会话，不会重置画布、删除素材或重新提交生成任务。']},
+  {title:'显示“未登录 / 重新连接”',steps:['桌面免登录模式先点「重新连接」；仍不成功则 Ctrl+F5。确认打开的是本机 http://127.0.0.1:8787/，并且后端已启动。','更新过程中，前端资源与后端启动时间不同步可能让页面保留一次失败的登录检查；仅看到“未登录”不能断定是账号过期。这是可能原因，具体错误应结合日志确认。','NAS 账号模式需要使用分配给自己的工作区地址、邮箱和密码登录；会话过期后重新登录。不能通过免登录接口绕过 NAS 登录。','持续失败时查看 server/server.log 与 server/server.err.log（NAS 查看对应 app 容器日志）。不要为排查直接删除 server/data、数据库、密钥或浏览器资料。']},
+  {title:'工作区账号、Muse 账号与 API Key',steps:['NAS 工作区邮箱和密码用于进入自己的 musecanvas；Muse 账号 / Cookie 用于 muse2api 生成；模型供应商 API Key 用于外部接口。这三者需要分别配置。','NAS 每人一个独立容器组、数据目录和入口。只导入自己的 Muse Cookie 或密钥，不共享账号池或复制他人数据卷。修改工作区密码在「设置 → 账号」，Muse Cookie 到期则到自己的账号池重新绑定。']},
+  {title:'连接通过但生成失败',steps:['先区分当前节点使用 Muse、外部模型还是 ComfyUI。选择外部图片 / 视频模型后，对应生成不再跟随 Muse 接入方式；对话和 AI 搭建使用默认语言模型。','API Key、额度、接口协议、模型 ID、参考图支持、比例尺寸和时长都可能影响生成。外部模型连接测试只检查模型列表；ComfyUI 测试检查服务、节点和固定模型选项，均不等于真实生成已通过。','先提交一个小尺寸图片或短视频，检查「任务」及「历史」中的实际错误，再运行整套流程。不要将“无法计算价格”视为已确认的上游余额状态。']},
+  {title:'一键生成等待、失败或停止',steps:['等待参考图片完成是正常的依赖顺序。完成的节点跳过，不同分支在并发上限内执行；同一 ComfyUI 实例的图片与视频共用一个在途槽位。','失败节点会阻断自己的下游，独立分支继续；修正提示词、模型或参考图后再一键生成，可补齐未完成部分。提交结果未知时先到供应商核对任务，不要反复点击。','暂停 / 停止只影响后续派发，已提交的任务仍继续。关闭页面不停止后台；更新或重启服务前应等待任务完成。修改默认模型只影响新任务 / 新流程，现有流程保留启动时的配置绑定。']},
+  {title:'ComfyUI 地址、工作流与负载',steps:['本机程序和 ComfyUI 在同一电脑时通常填 http://127.0.0.1:8188，不加 /v1。NAS 连接电脑上的 ComfyUI 时填电脑的局域网 IP，容器里的 127.0.0.1 指向容器自己。','导入 API 格式 JSON，检查正向 / 负向提示词、参考图、尺寸及视频帧数绑定，指定最终保存节点。缺少的模型和自定义节点必须先在目标 ComfyUI 安装；保存的视频应为 MP4 或 WebM。','串行提交不保证所有工作流都能装入显存。先用小分辨率和短时长验证；只有绑定的尺寸 / 帧数限制才会替换原工作流参数。共享 GPU 的多个 NAS 工作区没有统一调度器，需要管理员另行控制。']},
+];
+
 const TABS = [
   { id: 'basics', label: '基本操作', icon: MousePointer2 },
   { id: 'keys', label: '快捷键', icon: Keyboard },
   { id: 'tools', label: '图片工具', icon: Wand2 },
   { id: 'workflows', label: '创作流程', icon: Sparkles },
+  { id: 'help', label: '接入与排错', icon: Settings },
 ];
 
 function KeyCombo({ combo }) {
@@ -92,7 +102,7 @@ export default function ShortcutsGuide({ open, onClose }) {
           <span className="sg-mark"><BookOpen size={20} /></span>
           <div>
             <h2>画布使用说明</h2>
-            <p>基本操作、创作工作台、分镜与视频流程</p>
+            <p>基本操作、模型接入、一键生成与 NAS 使用</p>
           </div>
           <button type="button" className="sg-close" onClick={onClose} aria-label="关闭"><X size={18} /></button>
         </header>
@@ -106,6 +116,7 @@ export default function ShortcutsGuide({ open, onClose }) {
         </nav>
 
         <div className="sg-body">
+          {tab === 'help' && <div className="sg-workflows"><p className="sg-lead">先确认运行方式和当前所选模型，再按下面步骤排查。重新连接或刷新页面不会重新提交生成任务。</p>{HELP.map(item=><article key={item.title}><h3>{item.title}</h3><ol>{item.steps.map(step=><li key={step}>{step}</li>)}</ol></article>)}</div>}
           {tab === 'workflows' && <div className="sg-workflows"><p className="sg-lead">推荐流程：AI 规划或填写分镜 → 建立节点 → 生成图片 → 生成视频 → 素材归档。需要重新选择结果时，使用生成历史和画布版本。</p>{WORKFLOWS.map(item=><article key={item.title}><h3>{item.title}</h3><ol>{item.steps.map(step=><li key={step}>{step}</li>)}</ol></article>)}</div>}
           {tab === 'basics' && (
             <div className="sg-grid">
