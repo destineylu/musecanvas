@@ -94,6 +94,19 @@ try{
  await visible(`!!document.querySelector('button[aria-label="退出登录"]')`);
  await send('Page.reload');await visible(`!!document.querySelector('button[aria-label="退出登录"]')`);
  assert.equal(await js(`(async()=>{const r=await fetch(${JSON.stringify(done.mediaUrl)});return r.status;})()`),200);
+ // The owner can obtain their Muse harness endpoint and manage a masked API key in Settings.
+ await send('Page.navigate',{url:a.base+'/settings'});
+ await visible(`!![...document.querySelectorAll('nav[aria-label="设置分类"] button')].find(e=>e.textContent==='API')`);
+ await js(`[...document.querySelectorAll('nav[aria-label="设置分类"] button')].find(e=>e.textContent==='API').click()`);
+ await visible(`!!document.querySelector('section[aria-label="API 设置"]')`);
+ await visible(`document.querySelector('section[aria-label="API 设置"]').textContent.includes(${JSON.stringify(a.base+'/v1')})`);
+ await fill('密钥名称','browser harness key');
+ await js(`document.querySelector('section[aria-label="API 设置"] form button').click()`);
+ await visible(`!![...document.querySelectorAll('section[aria-label="API 设置"] li')].find(e=>e.textContent.includes('browser harness key'))`);
+ assert.match(await js(`document.querySelector('section[aria-label="API 设置"]').textContent`),/Muse 账号反代/);
+ assert.equal(await js(`[...document.querySelectorAll('section[aria-label="API 设置"] li')].find(e=>e.textContent.includes('browser harness key')).querySelector('code').textContent.includes('…')`),true);
+ await js(`window.confirm=()=>true;[...document.querySelectorAll('section[aria-label="API 设置"] li')].find(e=>e.textContent.includes('browser harness key')).querySelector('button:last-child').click()`);
+ await visible(`![...document.querySelectorAll('section[aria-label="API 设置"] li')].some(e=>e.textContent.includes('browser harness key'))`);
  await js(`document.querySelector('button[aria-label="退出登录"]').click()`);await visible(`!!document.querySelector('input[aria-label="工作区账号"]')`);
  assert.equal(await js(`(async()=>{const r=await fetch(${JSON.stringify(done.mediaUrl)});return r.status;})()`),401);assert.equal(errors.length,0,errors.join('\n'));
  await send('Page.navigate',{url:b.base+'/projects'});await visible(`!!document.querySelector('input[aria-label="工作区账号"]')`);
