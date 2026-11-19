@@ -95,6 +95,10 @@ def cases(source):
     ack = "收到，9:16 竖屏花园小猫，我来从零画一张。"
     result["ack_then_attachment"] = scenario(source, ack, ready_at=30)
     result["ack_no_attachment"] = scenario(source, ack, ready_at=None, timeout=45)
+    ongoing = "全新 16:9 时尚大片，正在从零生成，不用任何参考图。"
+    result["ack_ongoing_then_attachment"] = scenario(source, ongoing, ready_at=30)
+    result["ack_ongoing_no_attachment"] = scenario(source, ongoing, ready_at=None, timeout=45)
+    result["ongoing_then_failure"] = scenario(source, "正在根据提示词生成图片，但生成失败，请重试。")
     result["ack_en_then_attachment"] = scenario(
         source, "Garden kitten in 9:16 vertical — generating it fresh from your description now.",
         ready_at=30)
@@ -111,9 +115,9 @@ def main():
         if name.startswith(("cn_claim_", "cn_ready_", "cn_short_", "cn_fresh_", "en_claim_", "en_ready_", "verified_report_")):
             assert item["outcome"] == "video", (name, item)
             assert item["elapsed"] >= int(name.rsplit("_", 1)[1]), (name, item)
-        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment", "fresh_claim_no_attachment"):
+        elif name in ("claim_no_attachment", "claim_only_cover", "ack_no_attachment", "fresh_claim_no_attachment", "ack_ongoing_no_attachment"):
             assert item["outcome"] == "timeout" and 45 <= item["elapsed"] < 46, (name, item)
-        elif name in ("ack_then_attachment", "ack_en_then_attachment"):
+        elif name in ("ack_then_attachment", "ack_en_then_attachment", "ack_ongoing_then_attachment"):
             assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)
         elif name == "stop_lifecycle":
             assert item["outcome"] == "video" and item["elapsed"] >= 30, (name, item)

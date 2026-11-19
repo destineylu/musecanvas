@@ -1392,7 +1392,7 @@ class MuseEngine:
             return False
         return bool(re.search(
             r"收到|明白|好的?[，,、]|我(?:来|这就|马上|立刻)|"
-            r"(?:正在|开始|马上|立刻|稍后)(?:生成|绘制|画)|"
+            r"(?:正在|开始|马上|立刻|稍后)[^。！？!?\n]{0,24}(?:生成|绘制|制作|渲染|画)|"
             r"(?:帮|给)你(?:画|生成|绘制|制作)|请稍等|稍等|请稍候|"
             r"\bon it\b|\bgot it\b|\bworking on (?:it|that|your)\b|"
             r"\bi['’]?(?:ll| will| am going to)\s+(?:draw|paint|create|generate|make)\b|"
