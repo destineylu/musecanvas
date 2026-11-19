@@ -19,6 +19,7 @@ web/dev.log.pid
 *.log.pid
 __pycache__/
 *.pyc
+deploy/nas/instances/
 
 # 环境配置（含密钥）
 .env

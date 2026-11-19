@@ -1,13 +1,19 @@
 import { Router } from 'express';
+import { CFG } from '../config.js';
 import { db, now, getSetting, addCredits } from '../db.js';
 import {
   findUserByEmail, verifyPassword, signToken, publicUser,
   requireAuth, hashPassword, inviteCodeOf, invitedUsers, isLocalRequest, localSession,
+  sessionCookieName,
 } from '../auth.js';
 
 const r = Router();
+const sessionCookie=(res,token)=>res.cookie(sessionCookieName,token,{httpOnly:true,sameSite:'strict',secure:CFG.secureCookie,path:'/',maxAge:CFG.jwtDays*86400000});
+r.get('/mode',(_req,res)=>res.json({mode:CFG.accessMode,registration:false}));
+r.post('/logout',(_req,res)=>{res.clearCookie(sessionCookieName,{httpOnly:true,sameSite:'strict',secure:CFG.secureCookie,path:'/'});res.json({ok:true});});
 
 r.post('/local-session', (req, res, next) => {
+  if(CFG.accessMode!=='local')return res.status(403).json({error:'此工作区已启用账号登录'});
   if (!isLocalRequest(req)) return res.status(403).json({ error: '请从本机地址打开程序' });
   res.set('Cache-Control', 'no-store');
   try { res.json(localSession(req)); } catch (error) { next(error); }
@@ -31,14 +37,23 @@ r.get('/invite', requireAuth, (req, res) => {
   });
 });
 
+const attempts=new Map();
 r.post('/login', (req, res) => {
+  const ip=req.socket.remoteAddress;
+  for(const [key,value] of attempts)if(value.until<Date.now())attempts.delete(key);
+  const attempt=attempts.get(ip)||{count:0,until:Date.now()+5*60000};
+  if(attempt.count>=20)return res.status(429).json({error:'登录尝试过多，请五分钟后重试'});
+  attempt.count++;attempts.set(ip,attempt);
   const { email, password } = req.body || {};
   const user = findUserByEmail(email);
-  if (!user || !verifyPassword(String(password || ''), user.password_hash)) {
+  if (typeof password!=='string'||password.length>1024||!user || (CFG.accessMode==='account'&&user.email.toLowerCase()!==CFG.ownerEmail) || !verifyPassword(String(password || ''), user.password_hash)) {
     return res.status(401).json({ error: '邮箱或密码错误' });
   }
   if (user.status !== 'active') return res.status(403).json({ error: '账号已被封禁' });
-  res.json({ token: signToken(user), user: publicUser(user) });
+  attempts.delete(ip);
+  const token=signToken(user);
+  if(CFG.accessMode==='account')sessionCookie(res,token);
+  res.set('Cache-Control','no-store').json({ token, user: publicUser(user) });
 });
 
 r.get('/me', requireAuth, (req, res) => {
@@ -60,7 +75,7 @@ r.patch('/me', requireAuth, (req, res) => {
     if (!verifyPassword(String(oldPassword || ''), req.user.password_hash)) {
       return res.status(400).json({ error: '原密码不正确' });
     }
-    if (String(password).length < 12) return res.status(400).json({ error: '新密码至少 12 位' });
+    if (typeof password!=='string'||password.length<12||password.length>1024) return res.status(400).json({ error: '新密码需为 12–1024 个字符' });
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(String(password)), req.user.id);
   }
   res.json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) });

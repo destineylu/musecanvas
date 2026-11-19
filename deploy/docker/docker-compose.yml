@@ -9,7 +9,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    image: mua:1.2.12
+    image: musecanvas:1.0
     container_name: mua
     restart: unless-stopped
 
@@ -19,6 +19,7 @@ services:
       HOST: 0.0.0.0
       PORT: "8787"
       TZ: Asia/Shanghai
+      ACCESS_MODE: account
 
     ports:
       - "8787:8787"     # 建议只绑内网： "192.168.1.10:8787:8787"

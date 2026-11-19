@@ -16,3 +16,4 @@ __pycache__
 deploy/docker/.env
 **/.env
 **/*.log.pid
+deploy/nas/instances

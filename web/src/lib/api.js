@@ -29,6 +29,8 @@ export async function request(path, { method = 'GET', body, form } = {}) {
 }
 
 export const api = {
+  authMode: () => request('/api/auth/mode'),
+  logout: () => request('/api/auth/logout',{method:'POST',body:{}}),
   models: () => request('/api/models'),
   modelConfig: () => request('/api/models/config'),
   comfyLibrary: () => request('/api/models/comfy/library'),

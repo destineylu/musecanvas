@@ -85,3 +85,16 @@ API 地址示例为 `http://100.x.x.x:8080/v1`，文件地址为 `http://100.x.x
 同一 ComfyUI 服务地址的图片和视频配置共享一个在途任务槽位；不会调用全局 `/interrupt` 干扰其它任务。执行状态保存 prompt_id，应用重启后仅续查原任务；队列和历史中都找不到任务时明确失败，不自动重发。默认模型不自动切换，也不会因本地不可达而转用远程。
 
 实现参考 [ComfyUI 官方通信接口](https://docs.comfy.org/development/comfyui-server/comms_routes)，使用 `/system_stats`、`/object_info/{class}`、`/upload/image`、`/prompt`、`/history/{prompt_id}`、`/queue` 和 `/view`。
+
+
+### NAS 多人隔离部署
+
+使用 [NAS 独立工作区方案](deploy/nas/README.md)，每人一组 musecanvas + muse2api 容器及独立入口，分别登录、绑定自己的 Muse 账号和 API 密钥。**这不是一个共享实例里的多个用户**；不共享账号池、Cookie、浏览器 profile、数据库、模型配置或数据卷。生成器：
+
+```sh
+node deploy/nas/create-instance.mjs --name alice --email alice@example.com --port 8788 --url https://alice.canvas.example.com
+```
+
+进入生成目录，查看 `.env` 中的专属初始密码，再执行 `docker compose up -d --build`。muse2api 和浏览器调试端口不对 NAS 发布。ACCESS_MODE=account 只接受实例指定邮箱，禁止本机免登录与注册，私有媒体需登录，含其它用户邮箱的旧库拒绝启动。原桌面 ACCESS_MODE=local 保持免登录；不要把桌面模式直接暴露到 NAS 网络供多人使用。
+
+工作区登录密码可在「设置 → 账号」修改。NAS 反向代理、资源及 ComfyUI 地址注意事项见部署说明。配置已进行双实例应用隔离与 Compose 校验，尚需在目标 NAS 实际构建运行。

@@ -9,6 +9,7 @@ import ProjectDetail from './pages/ProjectDetail.jsx';
 import Canvas from './pages/Canvas.jsx';
 import Accounts from './pages/Accounts.jsx';
 import Bind from './pages/Bind.jsx';
+import Login from './pages/Login.jsx';
 import './studio.css';
 
 function Boot() {
@@ -16,8 +17,9 @@ function Boot() {
 }
 
 function Guard({ children }) {
-  const { user, loading, error, refresh } = useAuth();
+  const { user, loading, error, refresh, mode } = useAuth();
   if (loading) return <Boot />;
+  if(!user&&mode==='account')return <Navigate to="/login" replace/>;
   if (!user) return <div className="grid h-full place-items-center p-8"><div><p role="alert">{error || '工作区连接失败'}</p><button className="mt-4 text-brand-500" onClick={refresh}>重新连接</button></div></div>;
   return children;
 }
@@ -28,7 +30,7 @@ export default function App() {
       <Routes>
         <Route
           path="/login"
-          element={<Navigate to="/projects" replace />}
+          element={<LoginEntry/>}
         />
         <Route path="/bind/:code" element={<Guard><Bind /></Guard>} />
 
@@ -57,3 +59,4 @@ export default function App() {
     </ToastProvider>
   );
 }
+function LoginEntry(){const {mode,user,loading}=useAuth();if(loading)return <Boot/>;return mode==='account'&&!user?<Login/>:<Navigate to="/projects" replace/>;}

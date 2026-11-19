@@ -32,12 +32,25 @@ import { startWorkflowRunner } from './workflow-runner.js';
 
 const app = express();
 app.disable('x-powered-by');
+if(!['local','account'].includes(CFG.accessMode))throw new Error('ACCESS_MODE 必须为 local 或 account');
+app.use((req,res,next)=>{
+  if(CFG.accessMode!=='account')return next();
+  res.set('Cache-Control','no-store');
+  // Bearer API callers do not use ambient browser cookies. Extension binding has its own one-use code.
+  if(!['GET','HEAD','OPTIONS'].includes(req.method)&&!req.headers.authorization?.startsWith('Bearer ')&&req.path!=='/api/accounts/bind'){
+    const origin=req.get('origin');
+    const expected=CFG.publicBase?new URL(CFG.publicBase).origin:req.protocol+'://'+req.get('host');
+    if(req.get('sec-fetch-site')==='cross-site'||origin&&origin!==expected)return res.status(403).json({error:'请求来源与工作区地址不匹配'});
+  }
+  next();
+});
 app.use(express.json({ limit: '80mb' }));
 
 // 简易 CORS：开发期前端跑在 5173
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const binding = req.path === '/api/accounts/bind' || req.path.startsWith('/api/accounts/bind/');
+  if(CFG.accessMode==='account'&&!binding){if(req.method==='OPTIONS')return res.sendStatus(204);return next();}
   if (origin && (binding || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
     res.setHeader('Access-Control-Allow-Origin', binding ? '*' : origin);
     if (!binding) res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -49,9 +62,19 @@ app.use((req, res, next) => {
 });
 
 /* ------------------------------ 静态资源 ------------------------------ */
-app.use('/media', express.static(MEDIA_DIR, { maxAge: '7d', fallthrough: true }));
-app.get('/bridge-media/*', proxyMedia);
-app.use('/uploads', express.static(path.join(CFG.dataDir, 'uploads'), { maxAge: '1d', fallthrough: true }));
+const protectFile=(kind)=>(req,res,next)=>{
+  if(CFG.accessMode!=='account')return next();
+  requireAuth(req,res,()=>{
+    const filename=req.path.slice(1);
+    const owned=kind==='media'?db.prepare('SELECT 1 FROM jobs WHERE media_file=? AND user_id=?').get(filename,req.user.id):db.prepare('SELECT 1 FROM uploads WHERE filename=? AND user_id=?').get(filename,req.user.id);
+    if(!owned)return res.status(404).json({error:'文件不存在'});
+    next();
+  });
+};
+const privateHeaders=res=>{if(CFG.accessMode==='account')res.setHeader('Cache-Control','private, no-store');};
+app.use('/media', protectFile('media'), express.static(MEDIA_DIR, { maxAge: CFG.accessMode==='account'?0:'7d', fallthrough: true,setHeaders:privateHeaders }));
+app.get('/bridge-media/*', (req,res,next)=>CFG.accessMode==='account'?requireAuth(req,res,next):next(), proxyMedia);
+app.use('/uploads', protectFile('uploads'), express.static(path.join(CFG.dataDir, 'uploads'), { maxAge: CFG.accessMode==='account'?0:'1d', fallthrough: true,setHeaders:privateHeaders }));
 
 /* ------------------------------- 接口 ------------------------------- */
 app.get('/api/health', (_req, res) => {
@@ -127,6 +150,7 @@ app.use((err, _req, res, _next) => {
 
 /* ------------------------------ 引导数据 ------------------------------ */
 function bootstrap() {
+  if(CFG.accessMode==='account'&&db.prepare('SELECT 1 FROM users WHERE lower(email)<>? LIMIT 1').get(CFG.ownerEmail))throw new Error('隔离工作区禁止混用已有多人数据，请为每个人使用独立的新数据卷');
   if (CFG.jwtSecret.length < 32) {
     throw new Error('JWT_SECRET 必须在 server/.env 中配置为至少 32 个字符的随机密钥');
   }

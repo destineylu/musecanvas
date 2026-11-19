@@ -48,6 +48,9 @@ export const CFG = {
   // 平台自身
   jwtSecret: process.env.JWT_SECRET || '',
   jwtDays: num(process.env.JWT_DAYS, 14),
+  accessMode: process.env.ACCESS_MODE || 'local',
+  ownerEmail: (process.env.ADMIN_EMAIL || 'admin@muse.local').trim().toLowerCase(),
+  secureCookie: process.env.COOKIE_SECURE === '1',
 
   dataDir: process.env.DATA_DIR || path.join(ROOT, 'data'),
   publicBase: (process.env.PUBLIC_BASE || '').replace(/\/+$/, ''),

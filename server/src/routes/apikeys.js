@@ -61,6 +61,7 @@ export function apiKeyAuth(req, res, next) {
   if (!req.apiUser) {
     return res.status(403).json({ error: { message: '账号不可用', type: 'invalid_request_error' } });
   }
+  if(CFG.accessMode==='account'&&req.apiUser.email.toLowerCase()!==CFG.ownerEmail)return res.status(403).json({error:{message:'密钥不属于当前工作区',type:'invalid_request_error'}});
   req.apiKeyId = row.id;
   next();
 }

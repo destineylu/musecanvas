@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { BookOpen, FolderKanban, FolderOpen, Workflow, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { BookOpen, FolderKanban, FolderOpen, Workflow, Settings, PanelLeftClose, PanelLeftOpen, LogOut } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useAuth } from '../store/auth.jsx';
 import ShortcutsGuide from './ShortcutsGuide.jsx';
@@ -15,7 +15,7 @@ const NAV = [
 ];
 
 export default function Layout() {
-  const { user } = useAuth();
+  const { user, mode, logout } = useAuth();
   const nav = useNavigate();
   const { pathname } = useLocation();
   const inCanvas = /^(?:\/scratch)?\/canvas\/[^/]+\/?$/.test(pathname);
@@ -74,6 +74,7 @@ export default function Layout() {
         </nav>
 
         <div className={clsx('mt-auto flex w-full flex-col gap-2', sidebarOpen ? 'items-stretch px-3' : 'items-center')}>
+          {mode==='account'&&<div className="px-2 text-xs text-mist-300"><p className={clsx('truncate',!sidebarOpen&&'sr-only')} title={user?.email}>{user?.email}</p><button type="button" title="退出登录" aria-label="退出登录" className="mt-2 flex items-center gap-2 text-brand-500" onClick={async()=>{await logout();nav('/login');}}><LogOut size={16}/>{sidebarOpen&&'退出登录'}</button></div>}
           <NavItem to="/settings" label="设置" icon={Settings} expanded={sidebarOpen} />
           <span className={clsx('mt-1 font-mono tracking-wide text-mist-400/70', sidebarOpen ? 'px-3 text-[10px]' : 'text-center text-[8px]')}>{sidebarOpen ? `musecanvas v${displayVersion}` : `v${displayVersion}`}</span>
         </div>

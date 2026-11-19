@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+data
+profiles
+*profiles*
+__pycache__
+**/__pycache__
+*.pyc
+*.log
+*.log.pid

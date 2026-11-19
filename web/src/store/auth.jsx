@@ -7,11 +7,13 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [mode,setMode]=useState('local');
 
   const refresh = useCallback(async () => {
     try {
-      const { user: u, token } = await api.localSession();
-      setToken(token);
+      const {mode}=await api.authMode();setMode(mode);
+      const { user: u, token } = await (mode==='account'?api.me():api.localSession());
+      if(token)setToken(token);
       setError('');
       setUser(u);
       return u;
@@ -41,9 +43,11 @@ export function AuthProvider({ children }) {
     return out.user;
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try{await api.logout();}finally{
     setToken('');
     setUser(null);
+    }
   }, []);
 
   // 积分变动后局部更新，避免整页闪烁
@@ -52,8 +56,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, error, login, register, logout, refresh, patchUser }),
-    [user, loading, error, login, register, logout, refresh, patchUser]
+    () => ({ user, loading, error, mode, login, register, logout, refresh, patchUser }),
+    [user, loading, error, mode, login, register, logout, refresh, patchUser]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

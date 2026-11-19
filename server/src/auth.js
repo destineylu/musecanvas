@@ -1,7 +1,9 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createHash } from 'node:crypto';
 import { CFG } from './config.js';
 import { db, uid, now, addCredits, getSetting, setSetting } from './db.js';
+export const sessionCookieName='musecanvas_'+createHash('sha256').update(CFG.ownerEmail).digest('hex').slice(0,16);
 
 export const hashPassword = (pw) => bcrypt.hashSync(pw, 10);
 export const verifyPassword = (pw, hash) => bcrypt.compareSync(pw, hash);
@@ -69,6 +71,7 @@ export function isLocalRequest(req) {
 }
 
 export function localSession(req) {
+  if(CFG.accessMode!=='local')throw Object.assign(new Error('当前工作区需要账号登录'),{status:403});
   let user = findUserById(getSetting('localOwnerId'));
   if (!user || user.status !== 'active') {
     try {
@@ -87,14 +90,17 @@ export function localSession(req) {
 
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token;
+  const cookie = (req.headers.cookie || '').split(';').map(x=>x.trim()).find(x=>x.startsWith(sessionCookieName+'='))?.slice(sessionCookieName.length+1);
+  const token = header.startsWith('Bearer ') ? header.slice(7) : CFG.accessMode==='account' ? cookie : req.query.token;
   if (!token) return res.status(401).json({ error: '未登录' });
   try {
     const payload = jwt.verify(token, CFG.jwtSecret);
+    if(CFG.accessMode==='account'&&payload.local)return res.status(401).json({error:'请使用工作区账号重新登录'});
     if (payload.local && !isLocalRequest(req)) return res.status(403).json({ error: '本机会话仅允许在本机使用' });
     const user = findUserById(payload.sub);
     if (!user) return res.status(401).json({ error: '账号不存在' });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被封禁' });
+    if(CFG.accessMode==='account'&&user.email.toLowerCase()!==CFG.ownerEmail)return res.status(403).json({error:'此账号不属于当前独立工作区'});
     req.user = payload.local ? { ...user, role: 'admin' } : user;
     next();
   } catch {
