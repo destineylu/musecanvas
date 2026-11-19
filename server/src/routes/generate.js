@@ -103,6 +103,17 @@ function submit(kind, req, res) {
       params.duration = durations.includes(Number(duration)) ? Number(duration) : durations[0];
       if (typeof extra === 'string' && extra.trim()) params.extra = extra.trim().slice(0, 500);
     }
+    if (workspace.canvasId && params.sourceNodeId) {
+      const running = db.prepare("SELECT id,params FROM jobs WHERE user_id=? AND canvas_id=? AND status IN ('queued','processing') ORDER BY created_at DESC").all(req.user.id,workspace.canvasId);
+      const same = running.find(row=>{try{return JSON.parse(row.params).sourceNodeId===params.sourceNodeId;}catch{return false;}});
+      if (same) {
+        const job=getJob(same.id);
+        if(job.type!==kind||job.prompt!==prompt.trim()||job.params.size!==params.size||JSON.stringify(job.params.images||[])!==JSON.stringify(params.images||[])||(kind==='video'&&job.params.duration!==params.duration)) {
+          return res.status(409).json({error:'这个节点已有任务正在生成，请等待完成后再修改并提交'});
+        }
+        return res.json({job,reused:true});
+      }
+    }
     const job = enqueueJob(req.user.id, kind, prompt.trim(), params, workspace);
     return res.json({ job });
   } catch (error) {

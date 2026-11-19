@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db, now, uid } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { normalizeDocument, snapshot } from '../workbench.js';
+import { obsoleteWorkflowStep } from '../../../shared/workflow-state.js';
 
 const r = Router();
 
@@ -243,6 +244,9 @@ r.patch('/canvases/:canvasId', requireAuth, (req, res) => {
       const steps=new Map(JSON.parse(latestRun.data).steps.map(s=>[s.nodeId,s]));
       after.nodes=after.nodes.map(n=>{
         const step=steps.get(n.id),current=before.nodes.find(x=>x.id===n.id);
+        if(step&&current&&n.jobId===step.jobId&&obsoleteWorkflowStep(latestRun,current,step)) {
+          const copy={...n};for(const k of ['jobId','status','phase','progress','mediaUrl','error'])if(k in current)copy[k]=current[k];return copy;
+        }
         if(!step?.jobId||!current||current.jobId!==step.jobId)return n;
         const busy=['running','paused'].includes(latestRun.status)||step.state==='running';
         const stale=n.jobId===current.jobId&&n.status==='running'&&current.status!=='running';

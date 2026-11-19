@@ -14,6 +14,7 @@ import ShortcutsGuide from '../components/ShortcutsGuide.jsx';
 import DirectorStage from '../components/director/DirectorStage.jsx';
 import CanvasWorkbench from '../components/CanvasWorkbench.jsx';
 import { arrangeNodes, cleanShots, repairWorkflowLinks } from '../../../shared/canvas-workflow.js';
+import { obsoleteWorkflowStep } from '../../../shared/workflow-state.js';
 import ImageToolbar from '../components/canvas/ImageToolbar.jsx';
 import InpaintEditor from '../components/canvas/InpaintEditor.jsx';
 import PanoramaViewer from '../components/canvas/PanoramaViewer.jsx';
@@ -286,7 +287,7 @@ export default function Canvas() {
       let changed=false;
       const nodes=current.nodes.map(n=>{
         const step=steps.get(n.id);
-        if(!step||['waiting','cancelled'].includes(step.state))return n;
+        if(!step||['waiting','cancelled'].includes(step.state)||obsoleteWorkflowStep(run,n,step))return n;
         const patch={jobId:step.jobId,status:step.state==='done'?'done':step.state==='running'?'running':'failed',error:step.error||null,...(step.mediaUrl?{mediaUrl:step.mediaUrl}: {})};
         if(Object.entries(patch).every(([k,v])=>n[k]===v))return n;
         changed=true;return {...n,...patch};
