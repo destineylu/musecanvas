@@ -94,10 +94,13 @@ if ($mode -eq 'bridge') {
   $url = if ($savedLegacy.baseUrl) { $savedLegacy.baseUrl } else { (Read-Setting 'MUSE_BASE' 'http://127.0.0.1:18610').TrimEnd('/') -replace '/v1$','' }
   $upstreamUri = [uri]$url
   if ($upstreamUri.Scheme -eq 'http' -and $upstreamUri.Host -in '127.0.0.1','localhost' -and
-      $upstreamUri.Port -eq 18610 -and $upstreamUri.AbsolutePath -eq '/') {
-    if (-not (Test-Port 18610)) {
+      ($upstreamUri.Port -eq 18610 -or (Read-Setting 'MUSECANVAS_MANAGED_ENGINE' '0') -eq '1') -and $upstreamUri.AbsolutePath -eq '/') {
+    $enginePort = $upstreamUri.Port
+    if (-not (Test-Port $enginePort)) {
       $legacyDir = Join-Path $root 'upstream\muse2api'
       $python = Join-Path $legacyDir '.venv\Scripts\python.exe'
+      $portablePython = Join-Path $root 'runtime\python\python.exe'
+      if (Test-Path -LiteralPath $portablePython) { $python = $portablePython }
       if (-not (Test-Path $python)) {
         & python -m venv (Join-Path $legacyDir '.venv')
         if ($LASTEXITCODE -ne 0) { throw 'muse2api Python 环境创建失败' }
@@ -110,14 +113,14 @@ if ($mode -eq 'bridge') {
       try {
         $env:MUSE2API_HOME = $legacyDir
         $env:MUSE2API_KEY = $null
-        $ok = Start-Detached $python '-m uvicorn app:app --host 127.0.0.1 --port 18610' $legacyDir (Join-Path $legacyDir 'server.log')
+        $ok = Start-Detached $python "-m uvicorn app:app --host 127.0.0.1 --port $enginePort" $legacyDir (Join-Path $legacyDir 'server.log')
       } finally {
         $env:MUSE2API_HOME = $previousHome
         $env:MUSE2API_KEY = $previousKey
       }
       if (-not $ok) { throw 'muse2api 启动失败，查看 upstream\muse2api\server.err.log' }
     }
-    if (-not (Wait-Http 'http://127.0.0.1:18610/healthz' 30)) { throw 'muse2api 健康检查失败' }
+    if (-not (Wait-Http "$url/healthz" 30)) { throw 'muse2api 健康检查失败' }
   }
 }
 

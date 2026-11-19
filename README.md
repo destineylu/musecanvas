@@ -1,14 +1,18 @@
 # musecanvas 创作画布
 
-[免费下载一键安装版](https://github.com/destineylu/musecanvas/releases/latest) · [NAS 安装说明](deploy/nas/README.md)
+[下载 Windows 一键启动版](https://github.com/destineylu/musecanvas/releases/latest) · [使用说明](docs/使用说明.md)
 
-已有 Docker / Compose 的 Linux 或 NAS：`curl -fsSL https://github.com/destineylu/musecanvas/releases/latest/download/install.sh | bash`。安装包不含个人账号或密钥，x86_64 默认下载安装预构建镜像；ARM64 / --build 模式联网构建。
+**公开发行版面向 Windows 10/11 x64 用户。** 下载 `musecanvas-windows-x64.zip`，完整解压后双击 `start.cmd`，程序自动打开本机工作区。内置 Node.js 和 Python，无需 Docker、Git 或手动安装依赖，无需注册。电脑需有 Microsoft Edge 或 Google Chrome；生成使用用户自己的 Muse 账号或模型 API。
+
+双击 `stop.cmd` 停止程序。首次启动自动生成本机专属配置；更新前备份数据与配置，见压缩包内 `README-Windows.txt`。下载包不包含作者或公司任何账号、Cookie、API Key、代理订阅或 NAS 地址。
+
+NAS 多人工作区是公司内部使用的特定部署方案，不是普通用户需要安装的版本。相关运维文档保留在 [deploy/nas](deploy/nas/README.md)，与公开 Windows 下载包分开。
 
 musecanvas 用节点画布组织文字、图片和视频。对话和生成可通过 API Bridge 或原有 muse2api 账号池。已有项目、画布和本地素材继续由 `server/data` 保存。
 
 完整操作步骤见 [使用说明](docs/使用说明.md)。程序内「使用教程」包含「创作流程」和「接入与排错」。
 
-## Windows 本机启动
+## Windows 源码开发启动
 
 使用 Node.js 24。接入内网 Bridge 时先连接 Tailscale。
 
@@ -105,4 +109,4 @@ node deploy/nas/create-instance.mjs --name alice --email alice@example.com --por
 
 进入生成目录，查看 `.env` 中的专属初始密码，再执行 `docker compose up -d --build`。muse2api 和浏览器调试端口不对 NAS 发布。ACCESS_MODE=account 只接受实例指定邮箱，禁止本机免登录与注册，私有媒体需登录，含其它用户邮箱的旧库拒绝启动。原桌面 ACCESS_MODE=local 保持免登录；不要把桌面模式直接暴露到 NAS 网络供多人使用。
 
-工作区登录密码可在「设置 → 账号」修改。NAS 反向代理、资源及 ComfyUI 地址注意事项见部署说明。配置已进行双实例应用隔离与 Compose 校验，尚需在目标 NAS 实际构建运行。
+工作区登录密码可在「设置 → 账号」修改。NAS 反向代理、资源及 ComfyUI 地址注意事项见部署说明。配置已进行双实例应用隔离与 Compose 校验，目标 NAS 的实际登录隔离、代理及生成需要按部署环境另行验证。

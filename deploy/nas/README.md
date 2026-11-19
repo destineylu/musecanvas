@@ -1,16 +1,10 @@
-# NAS 多人使用：每人独立工作区
+# 公司内部 NAS 部署：每人独立工作区
 
 本方案采用每人独立的 musecanvas 一体化容器（内置 Muse 浏览器引擎），不是一个共享实例中的多个登录用户。每个人使用自己的入口、登录账号、Muse Cookie、账号池、浏览器 profile、模型密钥、数据库及文件目录。不能把多个人配置在同一个账号池，也不能复制别人的数据卷。旧的独立 muse2api 容器不再需要。
 
 ## 生成与启动
 
-已有 Docker 和 Compose 的 Linux / NAS 可直接安装公开发行包：
-
-```sh
-curl -fsSL https://github.com/destineylu/musecanvas/releases/latest/download/install.sh | bash
-```
-
-安装时询问工作区登录邮箱，默认目录 ~/musecanvas、端口 8787、仅本机访问。也可下载 install.sh 后加参数：`bash install.sh --name owner --email you@example.com --bind NAS内网IP --port 8787`。安装包和程序免费下载，上游服务费用另计。脚本验证 SHA256 后加载预构建的 x86_64 镜像，首次安装需联网下载。ARM64 或 --build 模式从源码构建。已存在的目录不会覆盖。
+本目录保留公司内部 NAS 运维方案。GitHub Releases 面向普通用户发布 Windows 便携包，不再发布 NAS 镜像或 Linux 一键安装包。已有公司实例继续使用，新增工作区由管理员从源码构建。
 
 从源码安装时，NAS 安装 Docker Compose 和 Node.js 18+（Node 仅用于生成部署文件；应用镜像内为 Node 24）。在源码根目录执行，例如：
 
