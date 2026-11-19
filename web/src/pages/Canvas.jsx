@@ -13,7 +13,7 @@ import ChatDrawer from '../components/ChatDrawer.jsx';
 import ShortcutsGuide from '../components/ShortcutsGuide.jsx';
 import DirectorStage from '../components/director/DirectorStage.jsx';
 import CanvasWorkbench from '../components/CanvasWorkbench.jsx';
-import { arrangeNodes, cleanShots } from '../../../shared/canvas-workflow.js';
+import { arrangeNodes, cleanShots, repairWorkflowLinks } from '../../../shared/canvas-workflow.js';
 import ImageToolbar from '../components/canvas/ImageToolbar.jsx';
 import InpaintEditor from '../components/canvas/InpaintEditor.jsx';
 import PanoramaViewer from '../components/canvas/PanoramaViewer.jsx';
@@ -847,6 +847,8 @@ export default function Canvas() {
     const size = sizes.includes(node.size) ? node.size : (mode === 'video' ? '16:9' : '1:1');
     const duration = VIDEO_DURATIONS.includes(Number(node.duration)) ? Number(node.duration) : 5;
     const incoming = doc.nodes.filter((n) => (doc.links || []).some((l) => l.from === n.id && l.to === nodeId));
+    const missingReference=incoming.find(n=>n.type==='image'&&!n.mediaUrl);
+    if(missingReference)return toast('请先生成连入的参考图「'+(missingReference.label||'图片')+'」，再生成当前节点','error');
     const own = (node.text || '').trim();
     const fromText = incoming.filter((n) => n.type === 'text' && n.text?.trim()).map((n) => n.text.trim());
     const finalPrompt = [own, ...fromText.filter((t) => t !== own)].filter(Boolean).join('\n');
@@ -1073,8 +1075,9 @@ export default function Canvas() {
     await checkpoint('应用流程前备份');
     const current=docRef.current,ids=new Map(plan.nodes.map(n=>[n.id,newId()]));
     const offset=current.nodes.length?Math.max(...current.nodes.map(n=>n.x+nodeW(n)))+120:0;
-    const nodes=arrangeNodes(plan.nodes,plan.links,n=>({width:nodeW(n),height:nodeH(n)})).map(n=>({...n,id:ids.get(n.id),x:n.x+offset}));
-    const links=plan.links.map(l=>({from:ids.get(l.from),to:ids.get(l.to)}));
+    const repairedLinks=repairWorkflowLinks(plan.nodes,plan.links);
+    const nodes=arrangeNodes(plan.nodes,repairedLinks,n=>({width:nodeW(n),height:nodeH(n)})).map(n=>({...n,id:ids.get(n.id),x:n.x+offset}));
+    const links=repairedLinks.map(l=>({from:ids.get(l.from),to:ids.get(l.to)}));
     setDoc(d=>({...d,nodes:[...d.nodes,...nodes],links:[...(d.links||[]),...links],storyboard:mergedShots}));
     setSelected([nodes.find(n=>sends(n))?.id||nodes[0].id]);setSelectedLink(null);fitDocument({nodes,links});toast('已添加 '+nodes.length+' 个节点，可关闭工作台查看');
   };
@@ -1092,7 +1095,7 @@ export default function Canvas() {
   const reuseHistoricalPrompt = job => applyWorkflow({title:'复用生成参数',nodes:[{id:'reuse',type:job.type,intent:'generate',label:'复用历史提示词',text:job.prompt,size:job.params.size||'16:9',duration:job.params.duration||5,status:'idle',x:0,y:0}],links:[]});
 
   const autoArrange = async () => {
-    try{await checkpoint('自动整理前');const current=docRef.current;const next={...current,nodes:arrangeNodes(current.nodes,current.links,n=>({width:nodeW(n),height:nodeH(n)}))};setDoc(next);fitDocument(next);toast('画布已按连线整理，可在历史中回退');}catch(e){toast(e.message,'error');}
+    try{await checkpoint('自动整理前');const current=docRef.current;const links=repairWorkflowLinks(current.nodes,current.links);const next={...current,links,nodes:arrangeNodes(current.nodes,links,n=>({width:nodeW(n),height:nodeH(n)}))};setDoc(next);fitDocument(next);toast('画布已按生成依赖整理，可在历史中回退');}catch(e){toast(e.message,'error');}
   };
 
   const runGridSplit = async (source, { rows, cols }) => {

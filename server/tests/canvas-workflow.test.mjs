@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {arrangeNodes,validateWorkflow,cleanShots,shotsToWorkflow,parseCSV} from '../../shared/canvas-workflow.js';
+import {arrangeNodes,validateWorkflow,cleanShots,shotsToWorkflow,parseCSV,repairWorkflowLinks} from '../../shared/canvas-workflow.js';
 const nodes=Array.from({length:6},(_,i)=>({id:'n'+i,type:i?'image':'text',text:'保留内容 '+i,mediaUrl:i===2?'/uploads/kept.png':undefined}));
 const size=n=>({width:n.id==='n0'?280:440,height:n.id==='n1'?600:260});
 const noOverlap=out=>{for(let i=0;i<out.length;i++)for(let j=i+1;j<out.length;j++){const a=out[i],b=out[j],sa=size(a),sb=size(b);assert(!(a.x<b.x+sb.width&&a.x+sa.width>b.x&&a.y<b.y+sb.height&&a.y+sa.height>b.y));}};
@@ -10,3 +10,10 @@ test('cycles and missing endpoints terminate without overlap',()=>{noOverlap(arr
 test('AI output drops executable/unapproved fields and rejects broken edges',()=>{const p=validateWorkflow({nodes:[{id:'a',type:'image',text:'猫',mediaUrl:'https://untrusted',script:'x'}]});assert(!('mediaUrl' in p.nodes[0]));assert(!('script' in p.nodes[0]));assert.throws(()=>validateWorkflow({nodes:[{id:'a',type:'image'},{id:'a',type:'text'}]}));assert.throws(()=>validateWorkflow({nodes:[{id:'a',type:'text'}],links:[{from:'a',to:'bad'}]}));});
 test('storyboards create text, image and video chains',()=>{const p=shotsToWorkflow([{title:'镜头1',action:'小猫向镜头跑来',duration:8,ratio:'9:16'}]);assert.equal(p.nodes.length,3);assert.equal(p.links.length,2);assert(p.nodes[2].text.includes('小猫'));assert.equal(p.nodes[2].duration,8);assert.equal(p.nodes[2].size,'9:16');assert.throws(()=>cleanShots(Array(101).fill({})));});
 test('CSV handles commas, quotes and multiline text',()=>{assert.deepEqual(parseCSV('镜头,动作\r\n"镜头1","你好,\n""世界"""'),[['镜头','动作'],['镜头1','你好,\n"世界"']]);assert.throws(()=>parseCSV('"未结束'));});
+test('serial AI shot chain becomes reference branches without touching other assets',()=>{
+ const items=[{id:'roleT',type:'text'},{id:'role',type:'image',label:'角色参考'},{id:'t1',type:'text'},{id:'i1',type:'image'},{id:'v1',type:'video'},{id:'t2',type:'text'},{id:'i2',type:'image'},{id:'v2',type:'video'},{id:'existing',type:'image'}];
+ const chain=items.slice(0,-1).slice(1).map((n,i)=>({from:items[i].id,to:n.id}));const links=repairWorkflowLinks(items,chain);
+ assert(links.some(l=>l.from==='role'&&l.to==='i1'));assert(links.some(l=>l.from==='role'&&l.to==='i2'));assert(links.some(l=>l.from==='i2'&&l.to==='v2'));
+ assert(!links.some(l=>l.from==='v1'));assert(!links.some(l=>l.to==='t1'||l.to==='t2'||l.to==='existing'));
+ const layout=arrangeNodes(items,links);assert.equal(layout.find(n=>n.id==='i1').x,layout.find(n=>n.id==='i2').x);assert.deepEqual(repairWorkflowLinks(items,links),links);
+});

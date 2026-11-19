@@ -9,6 +9,23 @@ export function cleanShots(rows) {
     ratio: ratios.includes(r?.ratio) ? r.ratio : '16:9' }));
 }
 
+export function repairWorkflowLinks(nodes, links) {
+  const byId=new Map(nodes.map(n=>[n.id,n])),result=[],seen=new Set(),imageInput=new Set();
+  const add=(from,to)=>{const a=byId.get(from),b=byId.get(to);if(!a||!b||from===to||b.type==='text'||a.type==='video')return;
+    if(a.type==='image'&&imageInput.has(to))return;
+    const key=JSON.stringify([from,to]);if(seen.has(key))return;
+    seen.add(key);if(a.type==='image')imageInput.add(to);result.push({from,to});};
+  for(const l of links){const a=byId.get(l.from),b=byId.get(l.to);if(a?.type==='text'&&b?.type==='text'){result.push({...l});seen.add(JSON.stringify([l.from,l.to]));}else add(l.from,l.to);}
+  for(const l of links){if(byId.get(l.from)?.type==='image'&&byId.get(l.to)?.type==='text')for(const next of links.filter(e=>e.from===l.to))add(l.from,next.to);}
+  const reference=nodes.find(n=>n.type==='image'&&/(角色.*参考|角色设定|character.*ref|reference.*character)/i.test(n.label||''));
+  if(reference){
+    const related=new Set([reference.id]),queue=[reference.id];
+    for(let i=0;i<queue.length;i++)for(const l of links){const next=l.from===queue[i]?l.to:l.to===queue[i]?l.from:null;if(next&&byId.has(next)&&!related.has(next)){related.add(next);queue.push(next);}}
+    for(const n of nodes.filter(n=>n.type==='image'&&n.id!==reference.id&&related.has(n.id)))add(reference.id,n.id);
+  }
+  return result;
+}
+
 export function validateWorkflow(raw) {
   if (!raw || !Array.isArray(raw.nodes) || !raw.nodes.length || raw.nodes.length > 80) throw Error('方案需要 1 到 80 个节点');
   const ids = new Set();
@@ -29,7 +46,7 @@ export function validateWorkflow(raw) {
     const key=JSON.stringify([l.from,l.to]);
     if (!seen.has(key)) { seen.add(key); links.push({from:l.from,to:l.to}); }
   }
-  return { title:text(raw.title,100)||'AI 创作流程', nodes, links, storyboard:cleanShots(raw.storyboard||[]) };
+  return { title:text(raw.title,100)||'AI 创作流程', nodes, links:repairWorkflowLinks(nodes,links), storyboard:cleanShots(raw.storyboard||[]) };
 }
 
 export function arrangeNodes(nodes, links, dimensions = () => ({ width:360,height:260 })) {
