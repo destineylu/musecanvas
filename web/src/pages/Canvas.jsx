@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Type, Image as ImageIcon, Video, Trash2, ZoomIn, ZoomOut, Maximize, Loader2, Sparkles,
   MousePointer2, Map as MapIcon, Expand, Upload, Send, X, ListChecks, Crosshair, MessageSquare, Settings, Hand, Link2, CircleHelp, Clapperboard, GripVertical, FolderOpen, History, BookOpen, LayoutGrid, Play, Pause, Square,
+  Cpu,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { api } from '../lib/api.js';
@@ -12,6 +13,7 @@ import { useToast } from '../components/ui.jsx';
 import ChatDrawer from '../components/ChatDrawer.jsx';
 import ShortcutsGuide from '../components/ShortcutsGuide.jsx';
 import DirectorStage from '../components/director/DirectorStage.jsx';
+import ComfyStudio from '../components/comfy/ComfyStudio.jsx';
 import CanvasWorkbench from '../components/CanvasWorkbench.jsx';
 import { arrangeNodes, cleanShots, repairWorkflowLinks } from '../../../shared/canvas-workflow.js';
 import { obsoleteWorkflowStep } from '../../../shared/workflow-state.js';
@@ -45,6 +47,7 @@ function parseRatio(value) {
 
 function frameRatio(n) {
   if (!n) return 1;
+  if (n.type === 'comfy') return 16 / 9;
   if (n.type === 'director') return parseRatio(n.director?.settings?.ratio?.replace('2.39:1', '239:100')) || 16 / 9;
   if (n.mediaUrl && n.mediaW && n.mediaH) return n.mediaW / n.mediaH;
   if (sends(n)) return parseRatio(n.size) || (n.type === 'video' ? 16 / 9 : 1);
@@ -65,7 +68,7 @@ function nodeW(n) {
 }
 
 function sends(n) {
-  if (!n || n.type === 'text' || n.type === 'director') return false;
+  if (!n || n.type === 'text' || n.type === 'director' || n.type === 'comfy') return false;
   if (n.intent === 'asset') return false;
   if (n.intent === 'generate') return true;
   return !n.mediaUrl || !!n.jobId;
@@ -214,6 +217,7 @@ export default function Canvas() {
   const [tool, setTool] = useState(null);
   const [guideOpen, setGuideOpen] = useState(false);
   const [directorId, setDirectorId] = useState(null);
+  const [comfyId, setComfyId] = useState(null);
   const [workbench, setWorkbench] = useState(null);
   const [minimapOpen, setMinimapOpen] = useState(() => { try { return localStorage.getItem('musecanvas_minimap') !== '0'; } catch { return true; } });
   const clipboardKey = `musecanvas_canvas_clipboard_${user?.id || user?.email || 'account'}`;
@@ -694,7 +698,7 @@ export default function Canvas() {
       duration: 5,
       status: 'idle',
     };
-    if (type === 'director' && !point) {
+    if ((type === 'director' || type === 'comfy') && !point) {
       const anchor = doc.nodes.find(item => selected.includes(item.id));
       n.x = anchor ? anchor.x + nodeW(anchor) + 64 : Math.round(center.x + 48);
       n.y = anchor ? anchor.y : Math.round(center.y - nodeH(n) / 2);
@@ -1359,7 +1363,7 @@ export default function Canvas() {
                 onPatch={(patch) => patchNode(n.id, patch)}
                 onUpload={() => openPicker('image/*,video/*', { x: n.x + nodeW(n) / 2, y: n.y + nodeH(n) / 2 }, n.id)}
                 onPreview={(media) => { setPreviewScale(1); setPreviewMedia(media); }}
-                onOpenDirector={() => setDirectorId(n.id)}
+                onOpenDirector={() => (n.type === 'comfy' ? setComfyId(n.id) : setDirectorId(n.id))}
                 onDelete={() => removeNode(n.id)}
                 onEditGenerate={() => focusNode(n,.85)}
               />
@@ -1470,6 +1474,7 @@ export default function Canvas() {
           <ToolBtn icon={Type} label="文本" onClick={() => addNode('text')} title="添加文本节点" />
           <ToolBtn icon={ImageIcon} label="图片" onClick={() => addNode('image', { intent: 'generate', label: '图片生成' })} title="添加图片生成节点" />
           <ToolBtn icon={Video} label="视频" onClick={() => addNode('video', { intent: 'generate', label: '视频生成' })} title="添加视频生成节点" />
+          <ToolBtn icon={Cpu} label="ComfyUI" onClick={() => addNode('comfy', { intent: 'comfy', label: 'ComfyUI 智能台' })} title="添加 ComfyUI 智能台：AI 规划参数、看图自检、分镜流水线" />
           <ToolBtn icon={Clapperboard} label="导演台" onClick={() => addNode('director', { intent: 'director', label: '3D 导演台' })} title="添加 3D 导演台：布景、摆姿势、取景并导出关键帧" />
           <ToolBtn icon={Upload} label="导入" onClick={() => openPicker('image/*,video/*', centerPoint(), null)} title="导入图片或视频" disabled={uploading} />
           <Sep />
@@ -1478,6 +1483,40 @@ export default function Canvas() {
         </div>
         <ShortcutsGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
         {workbench&&<CanvasWorkbench tab={workbench} onTab={setWorkbench} onClose={()=>setWorkbench(null)} canvasId={canvasInfo.id} shots={doc.storyboard||[]} selected={selected.length===1?doc.nodes.find(n=>n.id===selected[0]):null} onInsert={insertLibraryAssets} onRestore={restoreDocument} onCheckpoint={checkpoint} onApplyResult={applyHistoricalResult} onReuseJob={reuseHistoricalPrompt} onApply={applyWorkflow} onSetShots={setStoryboard}/>}
+        {comfyId && nodeById[comfyId] && (
+          <ComfyStudio
+            key={comfyId}
+            title={nodeById[comfyId].label}
+            canvasId={canvasInfo.id}
+            isAdmin={user?.role === 'admin'}
+            initial={nodeById[comfyId].comfy}
+            incoming={{
+              images: doc.nodes.filter((n) => n.type === 'image' && n.mediaUrl && links.some((l) => l.from === n.id && l.to === comfyId)).map((n) => ({ url: n.mediaUrl, label: n.label || '图片' })),
+              texts: doc.nodes.filter((n) => n.type === 'text' && n.text?.trim() && links.some((l) => l.from === n.id && l.to === comfyId)).map((n) => n.text.trim()),
+            }}
+            onSave={(comfy, preview) => patchNode(comfyId, { comfy, preview })}
+            onPlace={async (items, opts = {}) => {
+              const measured = await Promise.all(items.map((item) => new Promise((resolve) => {
+                const done = (w, h) => resolve({ ...item, w: w || 1024, h: h || 1024 });
+                if (item.type === 'video') {
+                  const v = document.createElement('video');
+                  v.preload = 'metadata';
+                  v.onloadedmetadata = () => done(v.videoWidth, v.videoHeight);
+                  v.onerror = () => done();
+                  v.src = item.url;
+                } else {
+                  const img = new Image();
+                  img.onload = () => done(img.naturalWidth, img.naturalHeight);
+                  img.onerror = () => done();
+                  img.src = item.url;
+                }
+              })));
+              placeAssets(nodeById[comfyId], measured, opts.columns || Math.min(3, measured.length));
+              toast(`已放入 ${measured.length} 个结果`, 'ok');
+            }}
+            onClose={() => setComfyId(null)}
+          />
+        )}
         {directorId && nodeById[directorId] && (
           <DirectorStage
             key={directorId}
@@ -1543,6 +1582,7 @@ export default function Canvas() {
               ['文本', Type, () => connectCreatedNode(addNode('text', { intent: 'input', label: '文本' }, menu.point), menu.link)],
               ['图片生成', ImageIcon, () => connectCreatedNode(addNode('image', { intent: 'generate', label: '图片生成' }, menu.point), menu.link)],
               ['视频生成', Video, () => connectCreatedNode(addNode('video', { intent: 'generate', label: '视频生成' }, menu.point), menu.link)],
+              ['ComfyUI 智能台', Cpu, () => connectCreatedNode(addNode('comfy', { intent: 'comfy', label: 'ComfyUI 智能台' }, menu.point), menu.link)],
               ['3D 导演台', Clapperboard, () => connectCreatedNode(addNode('director', { intent: 'director', label: '3D 导演台' }, menu.point), menu.link)],
               ['上传图片', Upload, () => {
                 if (!menu.link) return openPicker('image/*', menu.point, null);
@@ -1687,9 +1727,10 @@ function CanvasNode({ node, active, zoom, onMouseDown, onPortDown, onResizeDown,
   const failed = node.status === 'failed';
   const isText = node.type === 'text';
   const canSend = sends(node);
-  const isDirector = node.type === 'director';
-  const Icon = isText ? Type : isDirector ? Clapperboard : node.type === 'image' ? ImageIcon : Video;
-  const title = node.label || (isText ? '文本' : isDirector ? '3D 导演台' : node.type === 'image' ? '图片' : '视频');
+  const isComfy = node.type === 'comfy';
+  const isDirector = node.type === 'director' || isComfy;
+  const Icon = isText ? Type : isComfy ? Cpu : isDirector ? Clapperboard : node.type === 'image' ? ImageIcon : Video;
+  const title = node.label || (isText ? '文本' : isComfy ? 'ComfyUI 智能台' : isDirector ? '3D 导演台' : node.type === 'image' ? '图片' : '视频');
   const box = previewBox(node);
   const stage = taskStage(node);
   const rememberMedia = (el) => {
@@ -1722,7 +1763,7 @@ function CanvasNode({ node, active, zoom, onMouseDown, onPortDown, onResizeDown,
         ) : (
           <span className="mf-node-title" title="双击重命名" onDoubleClick={(e) => { e.stopPropagation(); setRenaming(true); }}>{title}</span>
         )}
-        {isDirector && <span className="mf-node-state">{node.director?.keyframes?.length || 0} 个关键帧</span>}
+        {isDirector && <span className="mf-node-state">{isComfy ? `${(node.comfy?.smart?.runs?.length || 0) + (node.comfy?.shots?.plan?.shots?.length || 0)} 项` : `${node.director?.keyframes?.length || 0} 个关键帧`}</span>}
         {canSend && !running && <button type="button" className="mf-node-edit" aria-label={'编辑并生成'+title} title="打开提示词、参数与生成按钮" onMouseDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onEditGenerate();}}><Sparkles size={12}/><span>编辑</span></button>}
         {!isText && !isDirector && (canSend || node.mediaUrl) && (
           <span className={clsx('mf-node-state', `is-${stage || 'idle'}`)}>
@@ -1748,11 +1789,15 @@ function CanvasNode({ node, active, zoom, onMouseDown, onPortDown, onResizeDown,
       <div className="mf-node-card">
         {isDirector ? (
           <div className="mf-media mf-director-card" title="拖动卡片移动位置，双击或点击按钮打开导演台" style={{ height: box.height }} onDoubleClick={(e) => { e.stopPropagation(); onOpenDirector(); }}>
-            {node.preview ? <img src={node.preview} alt="导演台关键帧" draggable={false} className="canvas-media" /> : (
-              <div className="mf-media-empty"><Clapperboard size={26} strokeWidth={1.4} /><span>布景 · 摆姿势 · 取景 · 导出参考图</span><span>拖动卡片可移动位置</span></div>
+            {node.preview ? (/\.(mp4|webm)$/i.test(node.preview)
+              ? <video src={node.preview} muted loop playsInline className="canvas-media" />
+              : <img src={node.preview} alt={isComfy ? 'ComfyUI 结果' : '导演台关键帧'} draggable={false} className="canvas-media" />) : (
+              isComfy
+                ? <div className="mf-media-empty"><Cpu size={26} strokeWidth={1.4} /><span>AI 规划参数 · 看图自检 · 分镜流水线</span><span>连入文本和图片作为意图与参考</span></div>
+                : <div className="mf-media-empty"><Clapperboard size={26} strokeWidth={1.4} /><span>布景 · 摆姿势 · 取景 · 导出参考图</span><span>拖动卡片可移动位置</span></div>
             )}
             <button type="button" className="mf-director-open" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onOpenDirector(); }}>
-              <Clapperboard size={14} /> 打开导演台
+              {isComfy ? <><Cpu size={14} /> 打开智能台</> : <><Clapperboard size={14} /> 打开导演台</>}
             </button>
           </div>
         ) : isText ? (

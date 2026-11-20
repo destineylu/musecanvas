@@ -34,7 +34,7 @@ export function startRun(canvasId,userId,limit=2) {
   const ids=new Set(targets.map(n=>n.id));
   const steps=targets.map(n=>{
     const input=links.filter(l=>l.to===n.id).map(l=>nodes.find(x=>x.id===l.from)).filter(Boolean);
-    if(input.some(x=>x.type==='video'||x.type==='director'))throw bad('「'+(n.label||n.id)+'」包含不支持的输入，请使用文本或图片连入');
+    if(input.some(x=>x.type==='video'||x.type==='director'||x.type==='comfy'))throw bad('「'+(n.label||n.id)+'」包含不支持的输入，请使用文本或图片连入');
     const text=(n.text||'').trim();
     const prompt=[text,...input.filter(x=>x.type==='text'&&x.text?.trim()&&x.text.trim()!==text).map(x=>x.text.trim())].filter(Boolean).join('\n');
     if(prompt.length<2||prompt.length>100000)throw bad('「'+(n.label||n.id)+'」提示词须为 2–100000 字');

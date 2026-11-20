@@ -7,6 +7,7 @@ import { selectedModel, modelById } from './model-config.js';
 import { submitExternal, pollExternal, externalResult, saveExternalResult } from './external-models.js';
 import { submitComfy, pollComfy, saveComfyResult, comfyOrigin } from './comfyui.js';
 import { buildComfyPrompt } from '../../shared/comfy-workflow.js';
+import { stepComfyRun, libOrigin } from './comfy-runner.js';
 
 const inflight = new Set();
 
@@ -195,7 +196,29 @@ async function runExternalJob(job) {
   } catch(e) { failJob(job.id,e.message); }
   finally { inflight.delete(job.id); }
 }
-const runJob = job => job.upstreamId?.startsWith('external:') ? runExternalJob(job) : job.upstreamId?.startsWith('bridge:') ? runBridgeJob(job) : runLegacyJob(job);
+async function runComfyLibJob(job) {
+  inflight.add(job.id);
+  try { await stepComfyRun(job); }
+  catch (e) { failJob(job.id, ['TimeoutError', 'AbortError'].includes(e.name) ? 'ComfyUI 请求超时，请检查服务' : e.message); }
+  finally { inflight.delete(job.id); }
+}
+
+// 同一个 ComfyUI 服务同时只推进一个已提交任务（工作流库任务与模型设置里的 ComfyUI 模型共用）。
+function comfyOriginOf(job) {
+  if (job.upstreamId?.startsWith('comfylib:')) { try { return libOrigin(); } catch { return null; } }
+  if (job.upstreamId?.startsWith('external:')) {
+    const p = modelById(job.params.providerId);
+    if (p?.protocol === 'comfyui') { try { return comfyOrigin(p); } catch { return null; } }
+  }
+  return null;
+}
+function comfyBusy(job) {
+  const origin = comfyOriginOf(job);
+  if (!origin) return false;
+  return pendingJobs().some((j) => j.id !== job.id && j.status === 'processing' && comfyOriginOf(j) === origin);
+}
+
+const runJob = job => job.upstreamId?.startsWith('comfylib:') ? runComfyLibJob(job) : job.upstreamId?.startsWith('external:') ? runExternalJob(job) : job.upstreamId?.startsWith('bridge:') ? runBridgeJob(job) : runLegacyJob(job);
 
 function dispatch() {
   const free = CFG.bridgeConcurrency - inflight.size;
@@ -203,7 +226,8 @@ function dispatch() {
   let slots = free;
   for (const job of pendingJobs().filter(item => item.upstreamId && item.phase !== 'paused' && !inflight.has(item.id))) {
     if (slots <= 0) break;
-    if (['external:queued','muse2api:queued','bridge:queued'].includes(job.upstreamId) && pendingJobs().filter(j=>j.status==='processing').length >= CFG.bridgeConcurrency) continue;
+    if (['external:queued','muse2api:queued','bridge:queued','comfylib:queued'].includes(job.upstreamId) && pendingJobs().filter(j=>j.status==='processing').length >= CFG.bridgeConcurrency) continue;
+    if ((job.upstreamId === 'comfylib:queued' || job.upstreamId === 'external:queued') && comfyBusy(job)) continue;
     if (job.upstreamId.startsWith('external:')) {
       const p = modelById(job.params.providerId);
       if(p?.protocol==='comfyui'&&job.upstreamId==='external:queued'&&pendingJobs().some(j=>{

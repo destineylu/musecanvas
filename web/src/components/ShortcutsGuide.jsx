@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   BookOpen, Brush, ClipboardPaste, Grid2x2, Hand, ImagePlus, Keyboard, MousePointer2, MousePointerClick,
-  Clapperboard, RectangleHorizontal, Spline, SquareDashedMousePointer, Sun, SwitchCamera, Wand2, X, ZoomIn, Sparkles, Settings, Trash2,
+  Clapperboard, Cpu, RectangleHorizontal, Spline, SquareDashedMousePointer, Sun, SwitchCamera, Wand2, X, ZoomIn, Sparkles, Settings, Trash2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import './shortcuts.css';
@@ -51,6 +51,7 @@ const TOOLS = [
   { icon: Sun, title: '打光', desc: '选择光线风格，拖动圆盘设置光源方位，调整高度、亮度和色调。', tint: '#e9a23b' },
   { icon: SwitchCamera, title: '多角度', desc: '移动机位重拍同一瞬间：正侧背、俯仰、景别和镜头都可调。', tint: '#8b6cf0' },
   { icon: Grid2x2, title: '宫格切分', desc: '把分镜宫格图切成单张图片节点，在本地完成。', tint: '#2fae8a' },
+  { icon: Cpu, title: 'ComfyUI 智能台', desc: 'AI 挑选本机 ComfyUI 工作流、改写提示词并调参，看图自检多轮迭代；还能拆分镜批量出关键帧和视频。', tint: '#e05a9a' },
   { icon: Clapperboard, title: '3D 导演台', desc: '用关节人偶和道具布景摆姿势，WASD 飞行取景，用时间轴做动画，导出关键帧图片或动画视频；也可让 Muse 根据描述布景和编排动作。', tint: '#f07a3a' },
 ];
 

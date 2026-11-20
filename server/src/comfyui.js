@@ -5,14 +5,16 @@ import { buildComfyPrompt } from '../../shared/comfy-workflow.js';
 const error=message=>Object.assign(new Error(message),{status:502});
 const headers=p=>p.apiKey?{Authorization:'Bearer '+p.apiKey}:{};
 export const comfyOrigin=p=>new URL(p.baseUrl).origin;
-async function request(p,route,{body,form,timeout=15000}={}) {
+export async function request(p,route,{body,form,timeout=15000}={}) {
   let payload,head=headers(p);
   if(form){const req=new Request('http://local.invalid',{method:'POST',body:form});head['Content-Type']=req.headers.get('content-type');payload=Buffer.from(await req.arrayBuffer());}
   else if(body!==undefined){head['Content-Type']='application/json';payload=JSON.stringify(body);}
   let res;
   try{res=await requestBuffer(p.baseUrl+route,{method:payload===undefined?'GET':'POST',headers:head,body:payload,timeout});}
   catch(e){throw error('无法连接 ComfyUI，请检查服务地址与运行状态');}
-  let data;try{data=JSON.parse(res.buffer.toString('utf8'));}catch{throw error('ComfyUI 返回非 JSON，请检查地址（无需 /v1）');}
+  let data;const text=res.buffer.toString('utf8');
+  if(!text.trim()&&res.status>=200&&res.status<300)return {};
+  try{data=JSON.parse(text);}catch{throw error('ComfyUI 返回非 JSON，请检查地址（无需 /v1）');}
   if(res.status<200||res.status>=300||data.error){
     const detail=Object.entries(data.node_errors||{}).map(([id,n])=>id+': '+(n.errors||[]).map(e=>e.message||e.type).join(', ')).join('; ');
     throw error('ComfyUI 拒绝工作流（HTTP '+res.status+'）'+(detail?'：'+detail.slice(0,500):''));

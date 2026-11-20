@@ -63,6 +63,28 @@ try{
  const jv=(await call('/api/videos','POST',{prompt:'another video',images:[ref]})).job;
  await until(()=>call('/api/jobs/'+ji.id),x=>x.job.status==='completed');await until(()=>call('/api/jobs/'+jv.id),x=>x.job.status==='completed');assert.equal(maxActive,1);
  const jf=(await call('/api/images','POST',{prompt:'FAIL'})).job;assert.equal((await until(()=>call('/api/jobs/'+jf.id),x=>['completed','failed'].includes(x.job.status))).job.status,'failed');
+ // Workflow-library jobs share the same server slot with existing providers.
+ await call('/api/comfy/config','PUT',{baseUrl:remote});
+ const importedLib=await call('/api/comfy/workflows','POST',{name:'Library integration',json:config(false).workflow});
+ const libId=importedLib.workflow.id;
+ const libraryJob=(await call('/api/comfy/run','POST',{workflowId:libId,images:[ref],values:{},label:'library cat'})).job;
+ const basicJob=(await call('/api/images','POST',{prompt:'basic beside library'})).job;
+ await until(()=>call('/api/jobs/'+libraryJob.id),x=>x.job.status==='processing' && !!x.job.result?.taskId);
+ await call('/api/comfy/free','POST',{},409);
+ await call('/api/comfy/jobs/'+libraryJob.id+'/cancel','POST',{},409);
+ assert.equal(requests.filter(r=>r.path==='/interrupt').length,0,'unverified legacy server must never receive interrupt');
+ await until(()=>call('/api/jobs/'+libraryJob.id),x=>['completed','failed'].includes(x.job.status));
+ assert.equal((await call('/api/jobs/'+libraryJob.id)).job.status,'completed');
+ await until(()=>call('/api/jobs/'+basicJob.id),x=>x.job.status==='completed');
+ assert.equal(maxActive,1,'library and basic providers must serialize');
+ const cancelled=(await call('/api/comfy/run','POST',{workflowId:libId,images:[ref],values:{}})).job;
+ await call('/api/comfy/jobs/'+cancelled.id+'/cancel','POST',{});
+ assert.equal((await call('/api/jobs/'+cancelled.id)).job.status,'failed');
+ const stale=(await call('/api/comfy/run','POST',{workflowId:libId,images:[ref],values:{}})).job;
+ await call('/api/comfy/workflows/'+libId,'PUT',{name:'Edited while queued'});
+ const staleResult=await until(()=>call('/api/jobs/'+stale.id),x=>x.job.status==='failed');
+ assert.match(staleResult.job.error,/工作流已变更/);
+ console.log('PASS library import, generation, shared serialization, queued cancellation and revision guard');
  // UI file import, binding selection, save, default selection and canvas display.
  const profile=path.join(dir,'chrome');chrome=spawn('C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--no-proxy-server','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
  const marker=path.join(profile,'DevToolsActivePort');await until(()=>fs.existsSync(marker),Boolean);const debug=fs.readFileSync(marker,'utf8').split('\n')[0];
@@ -74,7 +96,7 @@ try{
  const visible=exp=>until(()=>js(exp),Boolean,12000),click=label=>js(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()===${JSON.stringify(label)}).click()`);
  const fill=(label,value)=>js(`(()=>{const e=document.querySelector('[aria-label='+${JSON.stringify(JSON.stringify(label))}+']');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);
  await send('Page.enable');await send('Runtime.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
- await send('Page.navigate',{url:origin+'/settings'});await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='模型配置')`);await click('模型配置');await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='添加图片模型')`);await click('添加图片模型');
+ await send('Page.navigate',{url:origin+'/settings'});await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='模型配置')`);await click('ComfyUI');await visible(`!!document.querySelector('[aria-label="ComfyUI 设置"]') && document.body.innerText.includes('Edited while queued')`);fs.writeFileSync(path.resolve('data/comfy-library-verified.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));await click('模型配置');await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='添加图片模型')`);await click('添加图片模型');
  await js(`(()=>{const e=document.querySelector('select[aria-label="接口协议"]');e.value='comfyui';e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
  await visible(`!!document.querySelector('[aria-label="ComfyUI 工作流配置"]')`);
  const workflowFile=path.join(dir,'api-workflow.json');fs.writeFileSync(workflowFile,JSON.stringify(config(false).workflow));
@@ -85,6 +107,12 @@ try{
  const imported=(await call('/api/models/config')).providers.find(p=>p.name==='界面导入测试');assert.ok(imported.comfy.bindings.some(b=>b.source==='prompt'));
  await js(`(()=>{const e=document.querySelector('select[aria-label="默认图片模型"]');e.value=${JSON.stringify(imported.id)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);await until(()=>call('/api/models'),c=>c.defaults.image===imported.id);
  const artifacts=path.resolve('data');fs.mkdirSync(artifacts,{recursive:true});fs.writeFileSync(path.join(artifacts,'comfy-settings-verified.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+ await send('Page.navigate',{url:origin+'/scratch/canvas/'+canvasId});
+ await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='ComfyUI')`);
+ await click('ComfyUI');await visible(`Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='打开智能台')`);
+ await click('打开智能台');await visible(`!!document.querySelector('[aria-label="ComfyUI 智能台"]') && document.body.innerText.includes('AI 规划参数')`);
+ await click('分镜流水线');await visible(`document.body.innerText.includes('AI 拆分镜')`);
+ fs.writeFileSync(path.resolve('data/comfy-studio-verified.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
  assert.equal(errors.length,0,errors.join('\n'));const exited=once(chrome,'exit');await send('Browser.close');await exited;chrome=null;ws.close();
  console.log('PASS ComfyUI upload, prompt binding, image/video history outputs, same-instance serialization, persistent prompt restart, validation errors, browser import/save/default selection');
 }finally{

@@ -5,6 +5,7 @@ import Bridge from './Bridge.jsx';
 import ModelSettings from '../components/ModelSettings.jsx';
 import AccountSettings from '../components/AccountSettings.jsx';
 import ApiSettings from '../components/ApiSettings.jsx';
+import ComfySettings from '../components/ComfySettings.jsx';
 import { useAuth } from '../store/auth.jsx';
 
 export default function Settings() {
@@ -15,10 +16,11 @@ export default function Settings() {
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-ink-600 pb-3">
     <header className="flex items-center gap-2"><SettingsIcon size={19} className="text-brand-500"/><h1 className="text-xl font-semibold">设置</h1></header>
     <nav aria-label="设置分类" className="flex flex-wrap gap-1">
-      {[[ 'connection', '接入方式', Activity ],[ 'models', '模型配置', Activity ],[ 'api', 'API', Activity ],[ 'appearance', '主题', Palette ], ...(mode==='account'?[[ 'account', '账号', SettingsIcon ]]:[])].map(([id,label,Icon]) => <button key={id} type="button" aria-pressed={section===id} onClick={()=>setSection(id)} className={'flex items-center gap-2 rounded-xl px-4 py-2 text-sm '+(section===id?'bg-brand-500/10 text-brand-500':'text-mist-300')}><Icon size={16}/>{label}</button>)}
+      {[[ 'connection', '接入方式', Activity ],[ 'models', '模型配置', Activity ],[ 'comfy', 'ComfyUI', Activity ],[ 'api', 'API', Activity ],[ 'appearance', '主题', Palette ], ...(mode==='account'?[[ 'account', '账号', SettingsIcon ]]:[])].map(([id,label,Icon]) => <button key={id} type="button" aria-pressed={section===id} onClick={()=>setSection(id)} className={'flex items-center gap-2 rounded-xl px-4 py-2 text-sm '+(section===id?'bg-brand-500/10 text-brand-500':'text-mist-300')}><Icon size={16}/>{label}</button>)}
     </nav></div>
     <div hidden={section!=='connection'}><Bridge embedded/></div>
     {section==='models'&&<ModelSettings/>}
+    {section==='comfy'&&<ComfySettings/>}
     {section==='account'&&<AccountSettings/>}
     {section==='api'&&<ApiSettings/>}
     {section==='appearance'&&<section aria-label="主题设置" className="rounded-xl border border-ink-600 bg-ink-800 p-4">
